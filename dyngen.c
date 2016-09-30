@@ -40,7 +40,7 @@
 #define CONFIG_FORMAT_MACH
 #else
 #define CONFIG_FORMAT_ELF
-#endif
+#endif /* defined(CONFIG_WIN32) */
 
 #ifdef CONFIG_FORMAT_ELF
 
@@ -134,7 +134,7 @@
 
 #else
 #error unsupported CPU - please update the code
-#endif
+#endif /* cpu type */
 
 #include "elf.h"
 
@@ -148,13 +148,13 @@ typedef int64_t host_long;
 typedef uint64_t host_ulong;
 #define swabls(x) swab64s(x)
 #define swablss(x) swab64ss(x)
-#endif
+#endif /* ELF_CLASS */
 
 #ifdef ELF_USES_RELOCA
 #define SHT_RELOC SHT_RELA
 #else
 #define SHT_RELOC SHT_REL
-#endif
+#endif /* ELF_USES_RELOCA */
 
 #define EXE_RELOC ELF_RELOC
 #define EXE_SYM ElfW(Sym)
@@ -425,7 +425,7 @@ void elf_swap_rel(ELF_RELOC *rel)
     swabls(&rel->r_info);
 #ifdef ELF_USES_RELOCA
     swablss(&rel->r_addend);
-#endif
+#endif /* ELF_USES_RELOCA */
 }
 
 struct elf_shdr *find_elf_section(struct elf_shdr *shdr, int shnum, const char *shstr, 
@@ -705,7 +705,7 @@ int load_object(const char *filename)
     fd = open(filename, O_RDONLY 
 #ifdef _WIN32
               | O_BINARY
-#endif
+#endif /* def _WIN32 */
               );
     if (fd < 0) 
         error("can't open file '%s'", filename);
@@ -1227,7 +1227,7 @@ void get_reloc_expr(char *name, int name_size, const char *sym_name)
                      "(long)(&__dot_%s)",
                      sym_name + 1);
         else
-#endif
+#endif /* def HOST_SPARC */
             snprintf(name, name_size, "(long)(&%s)", sym_name);
     }
 }
@@ -1272,7 +1272,7 @@ get_plt_index (const char *name, unsigned long addend)
     return index;
 }
 
-#endif
+#endif /* def HOST_IA64 */
 
 #ifdef HOST_ARM
 
@@ -1426,7 +1426,7 @@ int arm_emit_ldr_info(const char *name, unsigned long start_offset,
     }
     return p - p_start;
 }
-#endif
+#endif /* def HOST_ARM */
 
 
 #define MAX_ARGS 3
@@ -1478,7 +1478,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
         }
         copy_size = len;
     }
-#endif    
+#endif /* def CONFIG_FORMAT_COFF */   
 #elif defined(HOST_PPC)
     {
         uint8_t *p;
@@ -1507,7 +1507,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
         /* XXX: check why it occurs */
         if (p == p_start)
             error("empty code for %s", name);
-#endif
+#endif /* 0 */
         if (get32((uint32_t *)p) != 0x6bfa8001)
             error("ret expected at the end of %s", name);
         copy_size = p - p_start;	    
@@ -1568,7 +1568,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
             if (skip_insn == INSN_NOP)
                 p -= 4;
         }
-#endif
+#endif /* 0 */
         copy_size = p - p_start;
     }
 #elif defined(HOST_SPARC64)
@@ -1589,7 +1589,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
         /* XXX: check why it occurs */
         if (p <= p_start)
             error("empty code for %s", name);
-#endif
+#endif /* 0 */
         start_insn = get32((uint32_t *)(p_start + 0x0));
         end_insn1 = get32((uint32_t *)(p + 0x0));
         end_insn2 = get32((uint32_t *)(p + 0x4));
@@ -1678,7 +1678,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
     }
 #else
 #error unsupported CPU
-#endif
+#endif /* CPU_TYPE */
 
     /* compute the number of arguments by looking at the relocations */
     for(i = 0;i < MAX_ARGS; i++)
@@ -1728,7 +1728,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
         fprintf(outfile, "    extern char %s;\n", name);
 #else
         fprintf(outfile, "    extern void %s();\n", name);
-#endif
+#endif /* defined(HOST_IA64) */
 
         for(i = 0, rel = relocs;i < nb_relocs; i++, rel++) {
             host_ulong offset = get_rel_offset(rel);
@@ -1748,7 +1748,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
 				sym_name+1, sym_name);
 			continue;
 		    }
-#endif
+#endif /* defined(HOST_SPARC) */
 #if defined(__APPLE__)
                     /* Set __attribute((unused)) on darwin because we
                        want to avoid warning when we don't use the symbol.  */
@@ -1764,7 +1764,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
 					sym_name);
 #else
                     fprintf(outfile, "extern char %s;\n", sym_name);
-#endif
+#endif /* defined(__APPLE__) and defined(HOST_IA64) */
                 }
             }
         }
@@ -1801,13 +1801,13 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
                     ptr = sdata[sym->n_sect-1];
 #else
                     ptr = sdata[sym->st_shndx];
-#endif
+#endif /* CONFIG_FORMAT */
                     if (!ptr)
                         error("__op_labelN in invalid section");
                     offset = sym->st_value;
 #ifdef CONFIG_FORMAT_MACH
                     offset -= section_hdr[sym->n_sect-1].addr;
-#endif
+#endif /* def CONFIG_FORMAT_MACH */
                     val = *(host_ulong *)(ptr + offset);
 #ifdef ELF_USES_RELOCA
                     {
@@ -1828,7 +1828,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
                             }
                         }
                     }
-#endif                    
+#endif /* def ELF_USES_RELOCA */                   
                     if (val >= start_offset && val <= start_offset + copy_size) {
                         n = strtol(p, NULL, 10);
                         fprintf(outfile, "    label_offsets[%d] = %ld + (gen_code_ptr - gen_code_buf);\n", n, (long)(val - start_offset));
@@ -1913,11 +1913,12 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
                     }
 #else
 #error unsupport object format
-#endif
+#endif /* CONFIG_FORMAT */
                 }
                 }
             }
 #elif defined(HOST_X86_64)
+#if defined(CONFIG_FORMAT_ELF)
             {
                 char name[256];
                 int type;
@@ -1950,6 +1951,9 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
                 }
                 }
             }
+#elif defined(CONFIG_FORMAT_MACH)
+#error not implemented yet
+#endif /* CONFIG_FORMAT */
 #elif defined(HOST_PPC)
             {
 #ifdef CONFIG_FORMAT_ELF
@@ -2092,7 +2096,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
 			}
 #else
 #error unsupport object format
-#endif
+#endif /* CONFIG_FORMAT */
             }
 #elif defined(HOST_S390)
             {
@@ -2444,7 +2448,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
                                 insn + 4);
                         opcode -= 4;
                     }
-#endif
+#endif /* 0 */
                     insn = get32((uint32_t *)(p_start - 4));
                     /* Calculate the size of the saved registers,
                        excluding pc.  */
@@ -2596,7 +2600,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
             }
 #else
 #error unsupported CPU
-#endif
+#endif /* HOST_CPU */
         fprintf(outfile, "    gen_code_ptr += %d;\n", copy_size);
         fprintf(outfile, "}\n");
         fprintf(outfile, "break;\n\n");
@@ -2649,7 +2653,7 @@ int gen_file(FILE *outfile, int out_type)
 #if defined(CONFIG_FORMAT_ELF) || defined(CONFIG_FORMAT_COFF)
                 if (sym->st_shndx != text_shndx)
                     error("invalid section for opcode (0x%x)", sym->st_shndx);
-#endif
+#endif /* defined(CONFIG_FORMAT_ELF) || defined(CONFIG_FORMAT_COFF) */
                 gen_code(name, sym->st_value, sym->st_size, outfile, 0);
             }
         }
@@ -2676,7 +2680,7 @@ fprintf(outfile,
 	}
 fprintf(outfile,
 "};\n");
-#endif
+#endif /* def HOST_ARM */
 
 fprintf(outfile,
 "int dyngen_code(uint8_t *gen_code_buf,\n"
@@ -2718,7 +2722,7 @@ fprintf(outfile,
 "    uint32_t *arm_data_ptr = arm_data_table + ARM_LDR_TABLE_SIZE;\n"
 /* Initialise the parmissible pool offset to an arbitary large value.  */
 "    uint8_t *arm_pool_ptr = gen_code_buf + 0x1000000;\n");
-#endif
+#endif /* def HOST_ARM */
 #ifdef HOST_IA64
     {
 	long addend, not_first = 0;
@@ -2775,7 +2779,7 @@ fprintf(outfile,
 	fprintf(outfile, "\n    };\n"
 	    "    unsigned int plt_offset[%u] = { 0 };\n", max_index + 1);
     }
-#endif
+#endif /* def HOST_IA64 */
 
 fprintf(outfile,
 "\n"
@@ -2799,7 +2803,7 @@ fprintf(outfile,
 "                arm_data_ptr = arm_data_table + ARM_LDR_TABLE_SIZE;\n"
 "                arm_pool_ptr = gen_code_ptr + 0x1000000;\n"
 "            }\n");
-#endif
+#endif /* def HOST_ARM */
 
 fprintf(outfile,
 "        switch(*opc_ptr++) {\n");
@@ -2811,11 +2815,11 @@ fprintf(outfile,
 #if 0
                 printf("%4d: %s pos=0x%08x len=%d\n", 
                        i, name, sym->st_value, sym->st_size);
-#endif
+#endif /* 0 */
 #if defined(CONFIG_FORMAT_ELF) || defined(CONFIG_FORMAT_COFF)
                 if (sym->st_shndx != text_shndx)
                     error("invalid section for opcode (0x%x)", sym->st_shndx);
-#endif
+#endif /* defined(CONFIG_FORMAT_ELF) || defined(CONFIG_FORMAT_COFF) */
                 gen_code(name, sym->st_value, sym->st_size, outfile, 1);
             }
         }
@@ -2849,7 +2853,7 @@ fprintf(outfile,
 	    "(uint64_t) code_gen_buffer + 2*(1<<20), plt_fixes,\n\t\t\t"
 	    "sizeof(plt_target)/sizeof(plt_target[0]),\n\t\t\t"
 	    "plt_target, plt_offset);\n    }\n");
-#endif
+#endif /* def HOST_IA64 */
 
 /* generate some code patching */ 
 #ifdef HOST_ARM
@@ -2857,7 +2861,7 @@ fprintf(outfile,
 "if (arm_data_ptr != arm_data_table + ARM_LDR_TABLE_SIZE)\n"
 "    gen_code_ptr = arm_flush_ldr(gen_code_ptr, arm_ldr_table, "
 "arm_ldr_ptr, arm_data_ptr, arm_data_table + ARM_LDR_TABLE_SIZE, 0);\n");
-#endif
+#endif /* HOST_ARM */
     /* flush instruction cache */
     fprintf(outfile, "flush_icache_range((unsigned long)gen_code_buf, (unsigned long)gen_code_ptr);\n");
 
