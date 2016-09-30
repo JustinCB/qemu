@@ -1952,7 +1952,7 @@ void gen_code(const char *name, host_ulong offset, host_ulong size,
                 }
             }
 #elif defined(CONFIG_FORMAT_MACH)
-#error not implemented yet
+#error darwin x86_64 host not implemented yet
 #endif /* CONFIG_FORMAT */
 #elif defined(HOST_PPC)
             {
