@@ -14,8 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <stdio.h>
 #include <sys/types.h>
@@ -39,9 +38,9 @@
 //#define DEBUG_MACHLOAD
 
 #ifdef DEBUG_MACHLOAD
-# define DPRINTF(...) do { if(loglevel) fprintf(logfile, __VA_ARGS__); printf(__VA_ARGS__); } while(0)
+# define DPRINTF(...) do { qemu_log(__VA_ARGS__); printf(__VA_ARGS__); } while(0)
 #else
-# define DPRINTF(...) do { if(loglevel) fprintf(logfile, __VA_ARGS__); } while(0)
+# define DPRINTF(...) do { qemu_log(__VA_ARGS__); } while(0)
 #endif
 
 # define check_mach_header(x) (x.magic == MH_CIGAM)
@@ -64,26 +63,14 @@ extern const char *interp_prefix;
 # endif
 #endif
 
-/* XXX: in an include */
-struct nlist_extended
-{
-    union {
-        char *n_name;
-        long  n_strx;
-    } n_un;
-    unsigned char n_type;
-    unsigned char n_sect;
-    short st_desc;
-    unsigned long st_value;
-    unsigned long st_size;
-};
+
 
 /* Print symbols in gdb */
 void *macho_text_sect = 0;
 int   macho_offset = 0;
 
 int load_object(const char *filename, struct target_pt_regs * regs, void ** mh);
-void qerror(const char *format, ...);
+
 #ifdef TARGET_I386
 typedef struct mach_i386_thread_state {
     unsigned int    eax;
@@ -562,7 +549,7 @@ int load_object(const char *filename, struct target_pt_regs * regs, void ** mh)
 
     switch(mach_hdr.filetype)
     {
-        case MH_EXECUTE:  break;
+        case MH_EXECUTE:  /*..huh?  why don't we just brake @ the end?    break;*/
         case MH_FVMLIB:
         case MH_DYLIB:
         case MH_DYLINKER: break;
@@ -705,7 +692,7 @@ int load_object(const char *filename, struct target_pt_regs * regs, void ** mh)
             DPRINTF("saving symtab of %s (%d symbol(s))\n", filename, symtabcmd->nsyms);
             struct syminfo *s;
             s = malloc(sizeof(*s));
-            s->disas_symtab = symtab;
+            s->disas_symtab.mach = symtab;
             s->disas_strtab = strtab;
             s->disas_num_syms = symtabcmd->nsyms;
             s->next = syminfos;
@@ -866,11 +853,11 @@ unsigned long setup_arg_pages(void * mh, char ** argv, char ** env)
         page_set_flags((int)argv[i], (int)(argv[i]+strlen(argv[i])), PROT_READ | PAGE_VALID);
     }
 
-    DPRINTF("pushing argc %d \n", argc);
+    DPRINTF("pushing argc %d\n", argc);
     stl(stack, argc);
     stack--;
 
-    DPRINTF("pushing mh 0x%x \n", (int)mh);
+    DPRINTF("pushing mh 0x%x\n", (int)mh);
     stl(stack, (int) mh);
 
     /* Stack points on the mh */

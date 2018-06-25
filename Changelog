@@ -1,12 +1,169 @@
+This file documents changes for QEMU releases 0.12 and earlier.
+For changelog information for later releases, see
+http://wiki.qemu.org/ChangeLog or look at the git history for
+more detailed information.
+
+
+version 0.12.0:
+
+  - Update to SeaBIOS 0.5.0
+  - e1000: fix device link status in Linux (Anthony Liguori)
+  - monitor: fix QMP for balloon command (Luiz Capitulino)
+  - QMP: Return an empty dict by default (Luiz Capitulino)
+  - QMP: Only handle converted commands (Luiz Capitulino)
+  - pci: support PCI based option rom loading (Gerd Hoffman/Anthony Liguori)
+  - Fix backcompat for hotplug of SCSI controllers (Daniel P. Berrange)
+  - fdc: fix migration from 0.11 (Juan Quintela)
+  - vmware-vga: fix segv on cursor resize. (Dave Airlie)
+  - vmware-vga: various fixes (Dave Airlie/Anthony Liguori)
+  - qdev: improve property error reporting. (Gerd Hoffmann)
+  - fix vga names in default_list (Gerd Hoffmann)
+  - usb-host: check mon before using it. (Gerd Hoffmann)
+  - usb-net: use qdev for -usbdevice (Gerd Hoffmann)
+  - monitor: Catch printing to non-existent monitor (Luiz Capitulino)
+  - Avoid permanently disabled QEMU monitor when UNIX migration fails (Daniel P. Berrange)
+  - Fix loading of ELF multiboot kernels (Kevin Wolf)
+  - qemu-io: Fix memory leak (Kevin Wolf)
+  - Fix thinko in linuxboot.S (Paolo Bonzini)
+  - target-i386: Fix evaluation of DR7 register (Jan Kiszka)
+  - vnc: hextile: do not generate ForegroundSpecified and SubrectsColoured tiles (Anthony Liguori)
+  - S390: Bail out without KVM (Alexander Graf)
+  - S390: Don't tell guest we're updating config space (Alexander Graf)
+  - target-s390: Fail on unknown instructions (Alexander Graf)
+  - osdep: Fix runtime failure on older Linux kernels (Andre Przywara)
+  - Fix a make -j race (Juergen Lock)
+  - target-alpha: Fix generic ctz64. (Richard Henderson)
+  - s390: Fix buggy assignment (Stefan Weil)
+  - target-mips: fix user-mode emulation startup (Nathan Froyd)
+  - target-i386: Update CPUID feature set for TCG (Andre Przywara)
+  - s390: fix build on 32 bit host (Michael S. Tsirkin)
+	
+version 0.12.0-rc2:
+
+  - v2: properly save kvm system time msr registers (Glauber Costa)
+  - convert more monitor commands to qmp (Luiz Capitulino)
+  - vnc: fix capslock tracking logic. (Gerd Hoffmann)
+  - QemuOpts: allow larger option values. (Gerd Hoffmann)
+  - scsi: fix drive hotplug. (Gerd Hoffmann)
+  - pci: don't hw_error() when no slot is available. (Gerd Hoffmann)
+  - pci: don't abort() when trying to hotplug with acpi off. (Gerd Hoffmann)
+  - allow default devices to be implemented in config file (Gerd Hoffman)
+  - vc: colorize chardev title line with blue background. (Gerd Hoffmann)
+  - chardev: make chardevs specified in config file work. (Gerd Hoffmann)
+  - qdev: also match bus name for global properties (Gerd Hoffmann)
+  - qdev: add command line option to set global defaults for properties. (Gerd Hoffmann)
+  - kvm: x86: Save/restore exception_index (Jan Kiszka)
+  - qdev: Replace device names containing whitespace (Markus Armbruster)
+  - fix rtc-td-hack on host without high-res timers (Gleb Natapov)
+  - virtio: verify features on load (Michael S. Tsirkin)
+  - vmware_vga: add rom file so that it boots. (Dave Airlie)
+  - Do not abort on qemu_malloc(0) in production builds (Anthony Liguori)
+  - Fix ARM userspace strex implementation. (Paul Brook)
+  - qemu: delete rule target on error (Michael S. Tsirkin)
+  - QMP: add human-readable description to error response (Markus Armbruster)
+  - convert more monitor commands to QError (Markus Armbruster)
+  - monitor: Fix double-prompt after "change vnc passwd BLA" (Markus Armbruster)
+  - monitor: do_cont(): Don't ask for passwords (Luiz Capitulino)
+  - monitor: Introduce 'block_passwd' command (Luiz Capitulino)
+  - pci: interrupt disable bit support (Michael S. Tsirkin)
+  - pci: interrupt status bit implementation (Michael S. Tsirkin)
+  - pci: prepare irq code for interrupt state (Michael S. Tsirkin)
+  - msix: function mask support (Michael S. Tsirkin)
+  - msix: macro rename for function mask support (Michael S. Tsirkin)
+  - cpuid: Fix multicore setup on Intel (Andre Przywara)
+  - kvm: x86: Fix initial kvm_has_msr_star (Jan Kiszka)
+  - Update OpenBIOS images to r640 (Aurelien Jarno)	
+
+version 0.10.2:
+
+  - fix savevm/loadvm (Anthony Liguori)
+  - live migration: fix dirty tracking windows (Glauber Costa)
+  - live migration: improve error propogation (Glauber Costa)
+  - qcow2: fix image creation for > ~2TB images (Chris Wright)
+  - hotplug: fix error handling for if= parameter (Eduardo Habkost)
+  - qcow2: fix data corruption (Nolan Leake)
+  - virtio: fix guest oops with 2.6.25 kernels (Rusty Russell)
+  - SH4: add support for -kernel (Takashi Yoshii, Aurelien Jarno)
+  - hotplug: fix closing of char devices (Jan Kiszka)
+  - hotplug: remove incorrect check for device name (Eduardo Habkost)
+  - enable -k on win32 (Herve Poussineau)
+  - configure: use LANG=C for grep (Andreas Faerber)
+  - fix VGA regression (malc)
+	
+version 0.10.1:
+
+  - virtio-net: check right return size on sg list (Alex Williamson)
+  - Make qemu_announce_self handle holes (live migration after hotplug)
+    (Marcelo Tosatti)
+  - Revert r6804-r6808 (qcow2 allocation info).  This series of changes added
+    a high cost to startup for large qcow2 images (Anthony Liguori)
+  - qemu-img: fix help message (Aurelien Jarno)
+  - Fix build for non-default installs of SDL (Anthony Liguori)
+  - Fix race condition in env->interrupt_request.  When using TCG and a dynticks
+    host timer, this condition could cause TCG to get stuck in an infinite
+    loop (Aurelien Jarno)
+  - Fix reading encrypted hard disk passwords during early startup (Jan Kiszka)
+  - Fix encrypted disk reporting in 'info block' (Jan Kiszka)
+  - Fix console size with tiny displays (MusicPal) (Jan Kiszka)
+  - Improve error handling in bdrv_open2 (Jan Kiszka)
+  - Avoid leaking data in mux'ed character devices (Jan Kiszka)
+  - Fix initial character device reset (no banner in monitor) (Jan Kiszka)
+  - Fix cpuid KVM crash on i386 host (Lubomir Rintel)
+  - Fix SLES10sp2 installation by adding ISTAT1 register to LSI SCSI emulation
+    (Ryan Harper)
+
+version 0.10.0:
+
+  - TCG support (No longer requires GCC 3.x)
+  - Kernel Virtual Machine acceleration support
+  - BSD userspace emulation
+  - Bluetooth emulation and host passthrough support
+  - GDB XML register description support
+  - Intel e1000 emulation
+  - HPET emulation
+  - VirtIO paravirtual device support
+  - Marvell 88w8618 / MusicPal emulation
+  - Nokia N-series tablet emulation / OMAP2 processor emulation
+  - PCI hotplug support
+  - Live migration and new save/restore formats
+  - Curses display support
+  - qemu-nbd utility to mount supported block formats
+  - Altivec support in PPC emulation and new firmware (OpenBIOS)
+  - Multiple VNC clients are now supported
+  - TLS encryption is now supported in VNC
+  - MIPS Magnum R4000 machine (Hervé Poussineau)
+  - Braille support (Samuel Thibault)
+  - Freecom MusicPal system emulation (Jan Kiszka)
+  - OMAP242x and Nokia N800, N810 machines (Andrzej Zaborowski)
+  - EsounD audio driver (Frederick Reeve)
+  - Gravis Ultrasound GF1 sound card (Tibor "TS" Schütz)
+  - Many, many, bug fixes and new features
+
+version 0.9.1:
+
   - TFTP booting from host directory (Anthony Liguori, Erwan Velu)
   - Tap device emulation for Solaris (Sittichai Palanisong)
   - Monitor multiplexing to several I/O channels (Jason Wessel)
   - ds1225y nvram support (Herve Poussineau)
   - CPU model selection support (J. Mayer, Paul Brook, Herve Poussineau)
-  - Several Sparc fixes (Aurelien Jarno, Blue Swirl)
+  - Several Sparc fixes (Aurelien Jarno, Blue Swirl, Robert Reif)
   - MIPS 64-bit FPU support (Thiemo Seufer)
-  - Xscale PDA emulation (Andrzei Zaborowski)
+  - Xscale PDA emulation (Andrzej Zaborowski)
   - ColdFire system emulation (Paul Brook)
+  - Improved SH4 support (Magnus Damm)
+  - MIPS64 support (Aurelien Jarno, Thiemo Seufer)
+  - Preliminary Alpha guest support (J. Mayer)
+  - Read-only support for Parallels disk images (Alex Beregszaszi)
+  - SVM (x86 virtualization) support (Alexander Graf)
+  - CRIS emulation (Edgar E. Iglesias)
+  - SPARC32PLUS execution support (Blue Swirl)
+  - MIPS mipssim pseudo machine (Thiemo Seufer)
+  - Strace for Linux userland emulation (Stuart Anderson, Thayne Harbaugh)
+  - OMAP310 MPU emulation plus Palm T|E machine (Andrzej Zaborowski)
+  - ARM v6, v7, NEON SIMD and SMP emulation (Paul Brook/CodeSourcery)
+  - Gumstix boards: connex and verdex emulation (Thorsten Zitterell)
+  - Intel mainstone II board emulation (Armin Kuster)
+  - VMware SVGA II graphics card support (Andrzej Zaborowski)
 
 version 0.9.0:
 
@@ -82,7 +239,7 @@ version 0.8.0:
     (Johannes Schindelin)
 
 version 0.7.2:
-  
+
   - x86_64 fixes (Win2000 and Linux 2.6 boot in 32 bit)
   - merge self modifying code handling in dirty ram page mecanism.
   - MIPS fixes (Ralf Baechle)
@@ -131,7 +288,7 @@ version 0.6.1:
   - Mac OS X port (Pierre d'Herbemont)
   - Virtual console support
   - Better monitor line edition
-  - New block device layer 
+  - New block device layer
   - New 'qcow' growable disk image support with AES encryption and
     transparent decompression
   - VMware 3 and 4 read-only disk image support (untested)
@@ -197,7 +354,7 @@ version 0.5.5:
   - FDC fixes for Win98
 
 version 0.5.4:
-  
+
   - qemu-fast fixes
   - BIOS area protection fix (aka EMM386.EXE fix) (Mike Nordell)
   - keyboard/mouse fix (Mike Nordell)
@@ -224,7 +381,7 @@ version 0.5.3:
   - added accurate CR0.MP/ME/TS emulation
   - fixed DMA memory write access (Win95 boot floppy fix)
   - graphical x86 linux loader
-  - command line monitor 
+  - command line monitor
   - generic removable device support
   - support of CD-ROM change
   - multiple network interface support
@@ -262,7 +419,7 @@ version 0.5.2:
   - eflags optimisation fix for string operations
 
 version 0.5.1:
-  
+
   - float access fixes when using soft mmu
   - PC emulation support on PowerPC
   - A20 support
@@ -277,7 +434,7 @@ version 0.5.1:
   - Major SPARC target fixes (dynamically linked programs begin to work)
 
 version 0.5.0:
-  
+
   - full hardware level VGA emulation
   - graphical display with SDL
   - added PS/2 mouse and keyboard emulation
@@ -315,7 +472,7 @@ version 0.4.2:
  - SMP kernels can at least be booted
 
 version 0.4.1:
-  
+
  - more accurate timer support in vl.
  - more reliable NE2000 probe in vl.
  - added 2.5.66 kernel in vl-test.
@@ -374,7 +531,7 @@ version 0.1.5:
 
  - ppc64 support + personality() patch (Rusty Russell)
  - first Alpha CPU patches (Falk Hueffner)
- - removed bfd.h dependancy
+ - removed bfd.h dependency
  - fixed shrd, shld, idivl and divl on PowerPC.
  - fixed buggy glibc PowerPC rint() function (test-i386 passes now on PowerPC).
 
@@ -401,7 +558,7 @@ version 0.1.3:
  - added bound, cmpxchg8b, cpuid instructions
  - added 16 bit addressing support/override for string operations
  - poll() fix
- 
+
 version 0.1.2:
 
  - compile fixes

@@ -1,8 +1,8 @@
 /*
  * QEMU 8253/8254 interval timer emulation
- * 
+ *
  * Copyright (c) 2003-2004 Fabrice Bellard
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
@@ -21,7 +21,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "vl.h"
+#include "hw.h"
+#include "pc.h"
+#include "isa.h"
+#include "qemu-timer.h"
 
 //#define DEBUG_PIT
 
@@ -50,9 +53,13 @@ typedef struct PITChannelState {
     qemu_irq irq;
 } PITChannelState;
 
-struct PITState {
+typedef struct PITState {
+    ISADevice dev;
+    MemoryRegion ioports;
+    uint32_t irq;
+    uint32_t iobase;
     PITChannelState channels[3];
-};
+} PITState;
 
 static PITState pit_state;
 
@@ -63,7 +70,8 @@ static int pit_get_count(PITChannelState *s)
     uint64_t d;
     int counter;
 
-    d = muldiv64(qemu_get_clock(vm_clock) - s->count_load_time, PIT_FREQ, ticks_per_sec);
+    d = muldiv64(qemu_get_clock_ns(vm_clock) - s->count_load_time, PIT_FREQ,
+                 get_ticks_per_sec());
     switch(s->mode) {
     case 0:
     case 1:
@@ -88,7 +96,8 @@ static int pit_get_out1(PITChannelState *s, int64_t current_time)
     uint64_t d;
     int out;
 
-    d = muldiv64(current_time - s->count_load_time, PIT_FREQ, ticks_per_sec);
+    d = muldiv64(current_time - s->count_load_time, PIT_FREQ,
+                 get_ticks_per_sec());
     switch(s->mode) {
     default:
     case 0:
@@ -114,20 +123,22 @@ static int pit_get_out1(PITChannelState *s, int64_t current_time)
     return out;
 }
 
-int pit_get_out(PITState *pit, int channel, int64_t current_time)
+int pit_get_out(ISADevice *dev, int channel, int64_t current_time)
 {
+    PITState *pit = DO_UPCAST(PITState, dev, dev);
     PITChannelState *s = &pit->channels[channel];
     return pit_get_out1(s, current_time);
 }
 
 /* return -1 if no transition will occur.  */
-static int64_t pit_get_next_transition_time(PITChannelState *s, 
+static int64_t pit_get_next_transition_time(PITChannelState *s,
                                             int64_t current_time)
 {
     uint64_t d, next_time, base;
     int period2;
 
-    d = muldiv64(current_time - s->count_load_time, PIT_FREQ, ticks_per_sec);
+    d = muldiv64(current_time - s->count_load_time, PIT_FREQ,
+                 get_ticks_per_sec());
     switch(s->mode) {
     default:
     case 0:
@@ -147,7 +158,7 @@ static int64_t pit_get_next_transition_time(PITChannelState *s,
     case 3:
         base = (d / s->count) * s->count;
         period2 = ((s->count + 1) >> 1);
-        if ((d - base) < period2) 
+        if ((d - base) < period2)
             next_time = base + period2;
         else
             next_time = base + s->count;
@@ -163,7 +174,8 @@ static int64_t pit_get_next_transition_time(PITChannelState *s,
         break;
     }
     /* convert to timer units */
-    next_time = s->count_load_time + muldiv64(next_time, ticks_per_sec, PIT_FREQ);
+    next_time = s->count_load_time + muldiv64(next_time, get_ticks_per_sec(),
+                                              PIT_FREQ);
     /* fix potential rounding problems */
     /* XXX: better solution: use a clock at PIT_FREQ Hz */
     if (next_time <= current_time)
@@ -172,8 +184,9 @@ static int64_t pit_get_next_transition_time(PITChannelState *s,
 }
 
 /* val must be 0 or 1 */
-void pit_set_gate(PITState *pit, int channel, int val)
+void pit_set_gate(ISADevice *dev, int channel, int val)
 {
+    PITState *pit = DO_UPCAST(PITState, dev, dev);
     PITChannelState *s = &pit->channels[channel];
 
     switch(s->mode) {
@@ -186,7 +199,7 @@ void pit_set_gate(PITState *pit, int channel, int val)
     case 5:
         if (s->gate < val) {
             /* restart counting on rising edge */
-            s->count_load_time = qemu_get_clock(vm_clock);
+            s->count_load_time = qemu_get_clock_ns(vm_clock);
             pit_irq_timer_update(s, s->count_load_time);
         }
         break;
@@ -194,7 +207,7 @@ void pit_set_gate(PITState *pit, int channel, int val)
     case 3:
         if (s->gate < val) {
             /* restart counting on rising edge */
-            s->count_load_time = qemu_get_clock(vm_clock);
+            s->count_load_time = qemu_get_clock_ns(vm_clock);
             pit_irq_timer_update(s, s->count_load_time);
         }
         /* XXX: disable/enable counting */
@@ -203,20 +216,23 @@ void pit_set_gate(PITState *pit, int channel, int val)
     s->gate = val;
 }
 
-int pit_get_gate(PITState *pit, int channel)
+int pit_get_gate(ISADevice *dev, int channel)
 {
+    PITState *pit = DO_UPCAST(PITState, dev, dev);
     PITChannelState *s = &pit->channels[channel];
     return s->gate;
 }
 
-int pit_get_initial_count(PITState *pit, int channel)
+int pit_get_initial_count(ISADevice *dev, int channel)
 {
+    PITState *pit = DO_UPCAST(PITState, dev, dev);
     PITChannelState *s = &pit->channels[channel];
     return s->count;
 }
 
-int pit_get_mode(PITState *pit, int channel)
+int pit_get_mode(ISADevice *dev, int channel)
 {
+    PITState *pit = DO_UPCAST(PITState, dev, dev);
     PITChannelState *s = &pit->channels[channel];
     return s->mode;
 }
@@ -225,7 +241,7 @@ static inline void pit_load_count(PITChannelState *s, int val)
 {
     if (val == 0)
         val = 0x10000;
-    s->count_load_time = qemu_get_clock(vm_clock);
+    s->count_load_time = qemu_get_clock_ns(vm_clock);
     s->count = val;
     pit_irq_timer_update(s, s->count_load_time);
 }
@@ -259,7 +275,7 @@ static void pit_ioport_write(void *opaque, uint32_t addr, uint32_t val)
                     if (!(val & 0x10) && !s->status_latched) {
                         /* status latch */
                         /* XXX: add BCD and null count */
-                        s->status =  (pit_get_out1(s, qemu_get_clock(vm_clock)) << 7) |
+                        s->status =  (pit_get_out1(s, qemu_get_clock_ns(vm_clock)) << 7) |
                             (s->rw_mode << 4) |
                             (s->mode << 1) |
                             s->bcd;
@@ -309,7 +325,7 @@ static uint32_t pit_ioport_read(void *opaque, uint32_t addr)
     PITState *pit = opaque;
     int ret, count;
     PITChannelState *s;
-    
+
     addr &= 3;
     s = &pit->channels[addr];
     if (s->status_latched) {
@@ -369,8 +385,8 @@ static void pit_irq_timer_update(PITChannelState *s, int64_t current_time)
     qemu_set_irq(s->irq, irq_level);
 #ifdef DEBUG_PIT
     printf("irq_level=%d next_delay=%f\n",
-           irq_level, 
-           (double)(expire_time - current_time) / ticks_per_sec);
+           irq_level,
+           (double)(expire_time - current_time) / get_ticks_per_sec());
 #endif
     s->next_transition_time = expire_time;
     if (expire_time != -1)
@@ -386,46 +402,42 @@ static void pit_irq_timer(void *opaque)
     pit_irq_timer_update(s, s->next_transition_time);
 }
 
-static void pit_save(QEMUFile *f, void *opaque)
-{
-    PITState *pit = opaque;
-    PITChannelState *s;
-    int i;
-    
-    for(i = 0; i < 3; i++) {
-        s = &pit->channels[i];
-        qemu_put_be32s(f, &s->count);
-        qemu_put_be16s(f, &s->latched_count);
-        qemu_put_8s(f, &s->count_latched);
-        qemu_put_8s(f, &s->status_latched);
-        qemu_put_8s(f, &s->status);
-        qemu_put_8s(f, &s->read_state);
-        qemu_put_8s(f, &s->write_state);
-        qemu_put_8s(f, &s->write_latch);
-        qemu_put_8s(f, &s->rw_mode);
-        qemu_put_8s(f, &s->mode);
-        qemu_put_8s(f, &s->bcd);
-        qemu_put_8s(f, &s->gate);
-        qemu_put_be64s(f, &s->count_load_time);
-        if (s->irq_timer) {
-            qemu_put_be64s(f, &s->next_transition_time);
-            qemu_put_timer(f, s->irq_timer);
-        }
+static const VMStateDescription vmstate_pit_channel = {
+    .name = "pit channel",
+    .version_id = 2,
+    .minimum_version_id = 2,
+    .minimum_version_id_old = 2,
+    .fields      = (VMStateField []) {
+        VMSTATE_INT32(count, PITChannelState),
+        VMSTATE_UINT16(latched_count, PITChannelState),
+        VMSTATE_UINT8(count_latched, PITChannelState),
+        VMSTATE_UINT8(status_latched, PITChannelState),
+        VMSTATE_UINT8(status, PITChannelState),
+        VMSTATE_UINT8(read_state, PITChannelState),
+        VMSTATE_UINT8(write_state, PITChannelState),
+        VMSTATE_UINT8(write_latch, PITChannelState),
+        VMSTATE_UINT8(rw_mode, PITChannelState),
+        VMSTATE_UINT8(mode, PITChannelState),
+        VMSTATE_UINT8(bcd, PITChannelState),
+        VMSTATE_UINT8(gate, PITChannelState),
+        VMSTATE_INT64(count_load_time, PITChannelState),
+        VMSTATE_INT64(next_transition_time, PITChannelState),
+        VMSTATE_END_OF_LIST()
     }
-}
+};
 
-static int pit_load(QEMUFile *f, void *opaque, int version_id)
+static int pit_load_old(QEMUFile *f, void *opaque, int version_id)
 {
     PITState *pit = opaque;
     PITChannelState *s;
     int i;
-    
+
     if (version_id != 1)
         return -EINVAL;
 
     for(i = 0; i < 3; i++) {
         s = &pit->channels[i];
-        qemu_get_be32s(f, &s->count);
+        s->count=qemu_get_be32(f);
         qemu_get_be16s(f, &s->latched_count);
         qemu_get_8s(f, &s->count_latched);
         qemu_get_8s(f, &s->status_latched);
@@ -437,18 +449,31 @@ static int pit_load(QEMUFile *f, void *opaque, int version_id)
         qemu_get_8s(f, &s->mode);
         qemu_get_8s(f, &s->bcd);
         qemu_get_8s(f, &s->gate);
-        qemu_get_be64s(f, &s->count_load_time);
+        s->count_load_time=qemu_get_be64(f);
         if (s->irq_timer) {
-            qemu_get_be64s(f, &s->next_transition_time);
+            s->next_transition_time=qemu_get_be64(f);
             qemu_get_timer(f, s->irq_timer);
         }
     }
     return 0;
 }
 
-static void pit_reset(void *opaque)
+static const VMStateDescription vmstate_pit = {
+    .name = "i8254",
+    .version_id = 2,
+    .minimum_version_id = 2,
+    .minimum_version_id_old = 1,
+    .load_state_old = pit_load_old,
+    .fields      = (VMStateField []) {
+        VMSTATE_STRUCT_ARRAY(channels, PITState, 3, 2, vmstate_pit_channel, PITChannelState),
+        VMSTATE_TIMER(channels[0].irq_timer, PITState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static void pit_reset(DeviceState *dev)
 {
-    PITState *pit = opaque;
+    PITState *pit = container_of(dev, PITState, dev.qdev);
     PITChannelState *s;
     int i;
 
@@ -460,23 +485,72 @@ static void pit_reset(void *opaque)
     }
 }
 
-PITState *pit_init(int base, qemu_irq irq)
+/* When HPET is operating in legacy mode, i8254 timer0 is disabled */
+void hpet_pit_disable(void) {
+    PITChannelState *s;
+    s = &pit_state.channels[0];
+    if (s->irq_timer)
+        qemu_del_timer(s->irq_timer);
+}
+
+/* When HPET is reset or leaving legacy mode, it must reenable i8254
+ * timer 0
+ */
+
+void hpet_pit_enable(void)
 {
     PITState *pit = &pit_state;
+    PITChannelState *s;
+    s = &pit->channels[0];
+    s->mode = 3;
+    s->gate = 1;
+    pit_load_count(s, 0);
+}
+
+static const MemoryRegionPortio pit_portio[] = {
+    { 0, 4, 1, .write = pit_ioport_write },
+    { 0, 3, 1, .read = pit_ioport_read },
+    PORTIO_END_OF_LIST()
+};
+
+static const MemoryRegionOps pit_ioport_ops = {
+    .old_portio = pit_portio
+};
+
+static int pit_initfn(ISADevice *dev)
+{
+    PITState *pit = DO_UPCAST(PITState, dev, dev);
     PITChannelState *s;
 
     s = &pit->channels[0];
     /* the timer 0 is connected to an IRQ */
-    s->irq_timer = qemu_new_timer(vm_clock, pit_irq_timer, s);
-    s->irq = irq;
+    s->irq_timer = qemu_new_timer_ns(vm_clock, pit_irq_timer, s);
+    s->irq = isa_get_irq(pit->irq);
 
-    register_savevm("i8254", base, 1, pit_save, pit_load, pit);
+    memory_region_init_io(&pit->ioports, &pit_ioport_ops, pit, "pit", 4);
+    isa_register_ioport(dev, &pit->ioports, pit->iobase);
 
-    qemu_register_reset(pit_reset, pit);
-    register_ioport_write(base, 4, 1, pit_ioport_write, pit);
-    register_ioport_read(base, 3, 1, pit_ioport_read, pit);
+    qdev_set_legacy_instance_id(&dev->qdev, pit->iobase, 2);
 
-    pit_reset(pit);
-
-    return pit;
+    return 0;
 }
+
+static ISADeviceInfo pit_info = {
+    .qdev.name     = "isa-pit",
+    .qdev.size     = sizeof(PITState),
+    .qdev.vmsd     = &vmstate_pit,
+    .qdev.reset    = pit_reset,
+    .qdev.no_user  = 1,
+    .init          = pit_initfn,
+    .qdev.props = (Property[]) {
+        DEFINE_PROP_UINT32("irq", PITState, irq,  -1),
+        DEFINE_PROP_HEX32("iobase", PITState, iobase,  -1),
+        DEFINE_PROP_END_OF_LIST(),
+    },
+};
+
+static void pit_register(void)
+{
+    isa_qdev_register(&pit_info);
+}
+device_init(pit_register)

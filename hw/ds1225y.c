@@ -1,8 +1,8 @@
 /*
  * QEMU NVRAM emulation for DS1225Y chip
- * 
- * Copyright (c) 2007 Hervé Poussineau
- * 
+ *
+ * Copyright (c) 2007-2008 Hervé Poussineau
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
@@ -22,100 +22,167 @@
  * THE SOFTWARE.
  */
 
-#include "vl.h"
+#include "sysbus.h"
+#include "trace.h"
 
-typedef enum
-{
-    none = 0,
-    readmode,
-    writemode,
-} nvram_open_mode;
-
-struct ds1225y_t
-{
-    target_phys_addr_t mem_base;
-    uint32_t capacity;
-    const char *filename;
-    QEMUFile *file;
-    nvram_open_mode open_mode;
-};
-
-static int ds1225y_set_to_mode(ds1225y_t *NVRAM, nvram_open_mode mode, const char *filemode)
-{
-    if (NVRAM->open_mode != mode)
-    {
-        if (NVRAM->file)
-            qemu_fclose(NVRAM->file);
-        NVRAM->file = qemu_fopen(NVRAM->filename, filemode);
-        NVRAM->open_mode = mode;
-    }
-    return (NVRAM->file != NULL);
-}
+typedef struct {
+    DeviceState qdev;
+    uint32_t chip_size;
+    char *filename;
+    FILE *file;
+    uint8_t *contents;
+} NvRamState;
 
 static uint32_t nvram_readb (void *opaque, target_phys_addr_t addr)
 {
-    ds1225y_t *NVRAM = opaque;
-    int64_t pos;
+    NvRamState *s = opaque;
+    uint32_t val;
 
-    pos = addr - NVRAM->mem_base;
-    if (addr >= NVRAM->capacity)
-        addr -= NVRAM->capacity;
-
-    if (!ds1225y_set_to_mode(NVRAM, readmode, "rb"))
-        return 0;
-    qemu_fseek(NVRAM->file, pos, SEEK_SET);
-    return (uint32_t)qemu_get_byte(NVRAM->file);
+    val = s->contents[addr];
+    trace_nvram_read(addr, val);
+    return val;
 }
 
-static void nvram_writeb (void *opaque, target_phys_addr_t addr, uint32_t value)
+static uint32_t nvram_readw (void *opaque, target_phys_addr_t addr)
 {
-    ds1225y_t *NVRAM = opaque;
-    int64_t pos;
+    uint32_t v;
+    v = nvram_readb(opaque, addr);
+    v |= nvram_readb(opaque, addr + 1) << 8;
+    return v;
+}
 
-    pos = addr - NVRAM->mem_base;
-    if (ds1225y_set_to_mode(NVRAM, writemode, "wb"))
-    {
-        qemu_fseek(NVRAM->file, pos, SEEK_SET);
-        qemu_put_byte(NVRAM->file, (int)value);
+static uint32_t nvram_readl (void *opaque, target_phys_addr_t addr)
+{
+    uint32_t v;
+    v = nvram_readb(opaque, addr);
+    v |= nvram_readb(opaque, addr + 1) << 8;
+    v |= nvram_readb(opaque, addr + 2) << 16;
+    v |= nvram_readb(opaque, addr + 3) << 24;
+    return v;
+}
+
+static void nvram_writeb (void *opaque, target_phys_addr_t addr, uint32_t val)
+{
+    NvRamState *s = opaque;
+
+    val &= 0xff;
+    trace_nvram_write(addr, s->contents[addr], val);
+
+    s->contents[addr] = val;
+    if (s->file) {
+        fseek(s->file, addr, SEEK_SET);
+        fputc(val, s->file);
+        fflush(s->file);
     }
 }
 
-static CPUReadMemoryFunc *nvram_read[] = {
-    &nvram_readb,
-    NULL,
-    NULL,
-};
-
-static CPUWriteMemoryFunc *nvram_write[] = {
-    &nvram_writeb,
-    NULL,
-    NULL,
-};
-
-static CPUWriteMemoryFunc *nvram_none[] = {
-    NULL,
-    NULL,
-    NULL,
-};
-
-/* Initialisation routine */
-ds1225y_t *ds1225y_init(target_phys_addr_t mem_base, const char *filename)
+static void nvram_writew (void *opaque, target_phys_addr_t addr, uint32_t val)
 {
-    ds1225y_t *s;
-    int mem_index1, mem_index2;
-
-    s = qemu_mallocz(sizeof(ds1225y_t));
-    if (!s)
-        return NULL;
-    s->mem_base = mem_base;
-    s->capacity = 0x2000; /* Fixed for ds1225y chip: 8K */
-    s->filename = filename;
-
-    /* Read/write memory */
-    mem_index1 = cpu_register_io_memory(0, nvram_read, nvram_write, s);
-    cpu_register_physical_memory(mem_base, s->capacity, mem_index1);
-    /* Read-only memory */
-    mem_index2 = cpu_register_io_memory(0, nvram_read, nvram_none, s);
-    cpu_register_physical_memory(mem_base + s->capacity, s->capacity, mem_index2);
-    return s;
+    nvram_writeb(opaque, addr, val & 0xff);
+    nvram_writeb(opaque, addr + 1, (val >> 8) & 0xff);
 }
+
+static void nvram_writel (void *opaque, target_phys_addr_t addr, uint32_t val)
+{
+    nvram_writeb(opaque, addr, val & 0xff);
+    nvram_writeb(opaque, addr + 1, (val >> 8) & 0xff);
+    nvram_writeb(opaque, addr + 2, (val >> 16) & 0xff);
+    nvram_writeb(opaque, addr + 3, (val >> 24) & 0xff);
+}
+
+static CPUReadMemoryFunc * const nvram_read[] = {
+    &nvram_readb,
+    &nvram_readw,
+    &nvram_readl,
+};
+
+static CPUWriteMemoryFunc * const nvram_write[] = {
+    &nvram_writeb,
+    &nvram_writew,
+    &nvram_writel,
+};
+
+static int nvram_post_load(void *opaque, int version_id)
+{
+    NvRamState *s = opaque;
+
+    /* Close file, as filename may has changed in load/store process */
+    if (s->file) {
+        fclose(s->file);
+    }
+
+    /* Write back nvram contents */
+    s->file = fopen(s->filename, "wb");
+    if (s->file) {
+        /* Write back contents, as 'wb' mode cleaned the file */
+        if (fwrite(s->contents, s->chip_size, 1, s->file) != 1) {
+            printf("nvram_post_load: short write\n");
+        }
+        fflush(s->file);
+    }
+
+    return 0;
+}
+
+static const VMStateDescription vmstate_nvram = {
+    .name = "nvram",
+    .version_id = 0,
+    .minimum_version_id = 0,
+    .minimum_version_id_old = 0,
+    .post_load = nvram_post_load,
+    .fields = (VMStateField[]) {
+        VMSTATE_VARRAY_UINT32(contents, NvRamState, chip_size, 0,
+                              vmstate_info_uint8, uint8_t),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+typedef struct {
+    SysBusDevice busdev;
+    NvRamState nvram;
+} SysBusNvRamState;
+
+static int nvram_sysbus_initfn(SysBusDevice *dev)
+{
+    NvRamState *s = &FROM_SYSBUS(SysBusNvRamState, dev)->nvram;
+    FILE *file;
+    int s_io;
+
+    s->contents = g_malloc0(s->chip_size);
+
+    s_io = cpu_register_io_memory(nvram_read, nvram_write, s,
+                                  DEVICE_NATIVE_ENDIAN);
+    sysbus_init_mmio(dev, s->chip_size, s_io);
+
+    /* Read current file */
+    file = fopen(s->filename, "rb");
+    if (file) {
+        /* Read nvram contents */
+        if (fread(s->contents, s->chip_size, 1, file) != 1) {
+            printf("nvram_sysbus_initfn: short read\n");
+        }
+        fclose(file);
+    }
+    nvram_post_load(s, 0);
+
+    return 0;
+}
+
+static SysBusDeviceInfo nvram_sysbus_info = {
+    .qdev.name  = "ds1225y",
+    .qdev.size  = sizeof(SysBusNvRamState),
+    .qdev.vmsd  = &vmstate_nvram,
+    .init       = nvram_sysbus_initfn,
+    .qdev.props = (Property[]) {
+        DEFINE_PROP_UINT32("size", SysBusNvRamState, nvram.chip_size, 0x2000),
+        DEFINE_PROP_STRING("filename", SysBusNvRamState, nvram.filename),
+        DEFINE_PROP_END_OF_LIST(),
+    },
+};
+
+static void nvram_register(void)
+{
+    sysbus_register_withprop(&nvram_sysbus_info);
+}
+
+device_init(nvram_register)

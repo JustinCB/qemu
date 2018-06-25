@@ -1,6 +1,6 @@
 /*
  *  m68k simulator syscall interface
- * 
+ *
  *  Copyright (c) 2005 CodeSourcery, LLC. Written by Paul Brook.
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -14,8 +14,7 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <sys/types.h>
@@ -39,7 +38,7 @@
 #define SYS_ISATTY      29
 #define SYS_LSEEK       199
 
-struct m86k_sim_stat {
+struct m68k_sim_stat {
     uint16_t sim_st_dev;
     uint16_t sim_st_ino;
     uint32_t sim_st_mode;
@@ -101,19 +100,19 @@ void do_m68k_simcall(CPUM68KState *env, int nr)
 {
     uint32_t *args;
 
-    args = (uint32_t *)(env->aregs[7] + 4);
+    args = (uint32_t *)(unsigned long)(env->aregs[7] + 4);
     switch (nr) {
     case SYS_EXIT:
         exit(ARG(0));
     case SYS_READ:
-        check_err(env, read(ARG(0), (void *)ARG(1), ARG(2)));
+        check_err(env, read(ARG(0), (void *)(unsigned long)ARG(1), ARG(2)));
         break;
     case SYS_WRITE:
-        check_err(env, write(ARG(0), (void *)ARG(1), ARG(2)));
+        check_err(env, write(ARG(0), (void *)(unsigned long)ARG(1), ARG(2)));
         break;
     case SYS_OPEN:
-        check_err(env, open((char *)ARG(0), translate_openflags(ARG(1)),
-                            ARG(2)));
+        check_err(env, open((char *)(unsigned long)ARG(0),
+                            translate_openflags(ARG(1)), ARG(2)));
         break;
     case SYS_CLOSE:
         {
@@ -129,7 +128,7 @@ void do_m68k_simcall(CPUM68KState *env, int nr)
         {
             int32_t ret;
 
-            ret = do_brk((void *)ARG(0));
+            ret = do_brk((abi_ulong)ARG(0));
             if (ret == -ENOMEM)
                 ret = -1;
             check_err(env, ret);
@@ -139,10 +138,10 @@ void do_m68k_simcall(CPUM68KState *env, int nr)
         {
             struct stat s;
             int rc;
-            struct m86k_sim_stat *p;
+            struct m68k_sim_stat *p;
             rc = check_err(env, fstat(ARG(0), &s));
             if (rc == 0) {
-                p = (struct m86k_sim_stat *)ARG(1);
+                p = (struct m68k_sim_stat *)(unsigned long)ARG(1);
                 p->sim_st_dev = tswap16(s.st_dev);
                 p->sim_st_ino = tswap16(s.st_ino);
                 p->sim_st_mode = tswap32(s.st_mode);

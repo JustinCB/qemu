@@ -1,17 +1,18 @@
-/* 
+/*
  * Arm PrimeCell PL050 Keyboard / Mouse Interface
  *
  * Copyright (c) 2006-2007 CodeSourcery.
  * Written by Paul Brook
  *
- * This code is licenced under the GPL.
+ * This code is licensed under the GPL.
  */
 
-#include "vl.h"
+#include "sysbus.h"
+#include "ps2.h"
 
 typedef struct {
+    SysBusDevice busdev;
     void *dev;
-    uint32_t base;
     uint32_t cr;
     uint32_t clk;
     uint32_t last;
@@ -19,6 +20,20 @@ typedef struct {
     qemu_irq irq;
     int is_mouse;
 } pl050_state;
+
+static const VMStateDescription vmstate_pl050 = {
+    .name = "pl050",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (VMStateField[]) {
+        VMSTATE_UINT32(cr, pl050_state),
+        VMSTATE_UINT32(clk, pl050_state),
+        VMSTATE_UINT32(last, pl050_state),
+        VMSTATE_INT32(pending, pl050_state),
+        VMSTATE_INT32(is_mouse, pl050_state),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 #define PL050_TXEMPTY         (1 << 6)
 #define PL050_TXBUSY          (1 << 5)
@@ -45,7 +60,6 @@ static void pl050_update(void *opaque, int level)
 static uint32_t pl050_read(void *opaque, target_phys_addr_t offset)
 {
     pl050_state *s = (pl050_state *)opaque;
-    offset -= s->base;
     if (offset >= 0xfe0 && offset < 0x1000)
         return pl050_id[(offset - 0xfe0) >> 2];
 
@@ -79,7 +93,7 @@ static uint32_t pl050_read(void *opaque, target_phys_addr_t offset)
     case 4: /* KMIIR */
         return s->pending | 2;
     default:
-        cpu_abort (cpu_single_env, "pl050_read: Bad offset %x\n", offset);
+        hw_error("pl050_read: Bad offset %x\n", (int)offset);
         return 0;
     }
 }
@@ -88,7 +102,6 @@ static void pl050_write(void *opaque, target_phys_addr_t offset,
                           uint32_t value)
 {
     pl050_state *s = (pl050_state *)opaque;
-    offset -= s->base;
     switch (offset >> 2) {
     case 0: /* KMICR */
         s->cr = value;
@@ -108,37 +121,67 @@ static void pl050_write(void *opaque, target_phys_addr_t offset,
         s->clk = value;
         return;
     default:
-        cpu_abort (cpu_single_env, "pl050_write: Bad offset %x\n", offset);
+        hw_error("pl050_write: Bad offset %x\n", (int)offset);
     }
 }
-static CPUReadMemoryFunc *pl050_readfn[] = {
+static CPUReadMemoryFunc * const pl050_readfn[] = {
    pl050_read,
    pl050_read,
    pl050_read
 };
 
-static CPUWriteMemoryFunc *pl050_writefn[] = {
+static CPUWriteMemoryFunc * const pl050_writefn[] = {
    pl050_write,
    pl050_write,
    pl050_write
 };
 
-void pl050_init(uint32_t base, qemu_irq irq, int is_mouse)
+static int pl050_init(SysBusDevice *dev, int is_mouse)
 {
+    pl050_state *s = FROM_SYSBUS(pl050_state, dev);
     int iomemtype;
-    pl050_state *s;
 
-    s = (pl050_state *)qemu_mallocz(sizeof(pl050_state));
-    iomemtype = cpu_register_io_memory(0, pl050_readfn,
-                                       pl050_writefn, s);
-    cpu_register_physical_memory(base, 0x00001000, iomemtype);
-    s->base = base;
-    s->irq = irq;
+    iomemtype = cpu_register_io_memory(pl050_readfn,
+                                       pl050_writefn, s,
+                                       DEVICE_NATIVE_ENDIAN);
+    sysbus_init_mmio(dev, 0x1000, iomemtype);
+    sysbus_init_irq(dev, &s->irq);
     s->is_mouse = is_mouse;
-    if (is_mouse)
+    if (s->is_mouse)
         s->dev = ps2_mouse_init(pl050_update, s);
     else
         s->dev = ps2_kbd_init(pl050_update, s);
-    /* ??? Save/restore.  */
+    return 0;
 }
 
+static int pl050_init_keyboard(SysBusDevice *dev)
+{
+    return pl050_init(dev, 0);
+}
+
+static int pl050_init_mouse(SysBusDevice *dev)
+{
+    return pl050_init(dev, 1);
+}
+
+static SysBusDeviceInfo pl050_kbd_info = {
+    .init = pl050_init_keyboard,
+    .qdev.name  = "pl050_keyboard",
+    .qdev.size  = sizeof(pl050_state),
+    .qdev.vmsd = &vmstate_pl050,
+};
+
+static SysBusDeviceInfo pl050_mouse_info = {
+    .init = pl050_init_mouse,
+    .qdev.name  = "pl050_mouse",
+    .qdev.size  = sizeof(pl050_state),
+    .qdev.vmsd = &vmstate_pl050,
+};
+
+static void pl050_register_devices(void)
+{
+    sysbus_register_withprop(&pl050_kbd_info);
+    sysbus_register_withprop(&pl050_mouse_info);
+}
+
+device_init(pl050_register_devices)

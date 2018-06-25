@@ -1,5 +1,5 @@
 /**
- * 
+ *
  * aes.c - integrated in QEMU by Fabrice Bellard from the OpenSSL project.
  */
 /*
@@ -27,19 +27,16 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#include "vl.h"
+#include "qemu-common.h"
 #include "aes.h"
 
+#ifndef NDEBUG
 #define NDEBUG
-#include <assert.h>
+#endif
 
 typedef uint32_t u32;
 typedef uint16_t u16;
 typedef uint8_t u8;
-
-#define MAXKC   (256/32)
-#define MAXKB   (256/8)
-#define MAXNR   14
 
 /* This controls loop-unrolling in aes_core.c */
 #undef FULL_UNROLL
@@ -1267,7 +1264,7 @@ void AES_decrypt(const unsigned char *in, unsigned char *out,
 
 void AES_cbc_encrypt(const unsigned char *in, unsigned char *out,
 		     const unsigned long length, const AES_KEY *key,
-		     unsigned char *ivec, const int enc) 
+		     unsigned char *ivec, const int enc)
 {
 
 	unsigned long n;
@@ -1294,7 +1291,7 @@ void AES_cbc_encrypt(const unsigned char *in, unsigned char *out,
 			AES_encrypt(tmp, tmp, key);
 			memcpy(out, tmp, AES_BLOCK_SIZE);
 			memcpy(ivec, tmp, AES_BLOCK_SIZE);
-		}			
+		}
 	} else {
 		while (len >= AES_BLOCK_SIZE) {
 			memcpy(tmp, in, AES_BLOCK_SIZE);
@@ -1312,6 +1309,6 @@ void AES_cbc_encrypt(const unsigned char *in, unsigned char *out,
 			for(n=0; n < len; ++n)
 				out[n] = tmp[n] ^ ivec[n];
 			memcpy(ivec, tmp, AES_BLOCK_SIZE);
-		}			
+		}
 	}
 }

@@ -1,8 +1,9 @@
 /*
- * Heathrow PIC support (standard PowerMac PIC)
- * 
- * Copyright (c) 2005 Fabrice Bellard
- * 
+ * Heathrow PIC support (OldWorld PowerMac)
+ *
+ * Copyright (c) 2005-2007 Fabrice Bellard
+ * Copyright (c) 2007 Jocelyn Mayer
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
@@ -21,9 +22,18 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "vl.h"
+#include "hw.h"
+#include "ppc_mac.h"
 
-//#define DEBUG
+/* debug PIC */
+//#define DEBUG_PIC
+
+#ifdef DEBUG_PIC
+#define PIC_DPRINTF(fmt, ...)                                   \
+    do { printf("PIC: " fmt , ## __VA_ARGS__); } while (0)
+#else
+#define PIC_DPRINTF(fmt, ...)
+#endif
 
 typedef struct HeathrowPIC {
     uint32_t events;
@@ -33,7 +43,9 @@ typedef struct HeathrowPIC {
 } HeathrowPIC;
 
 typedef struct HeathrowPICS {
+    MemoryRegion mem;
     HeathrowPIC pics[2];
+    qemu_irq *irqs;
 } HeathrowPICS;
 
 static inline int check_irq(HeathrowPIC *pic)
@@ -45,24 +57,21 @@ static inline int check_irq(HeathrowPIC *pic)
 static void heathrow_pic_update(HeathrowPICS *s)
 {
     if (check_irq(&s->pics[0]) || check_irq(&s->pics[1])) {
-        cpu_interrupt(first_cpu, CPU_INTERRUPT_HARD);
+        qemu_irq_raise(s->irqs[0]);
     } else {
-        cpu_reset_interrupt(first_cpu, CPU_INTERRUPT_HARD);
+        qemu_irq_lower(s->irqs[0]);
     }
 }
 
-static void pic_writel (void *opaque, target_phys_addr_t addr, uint32_t value)
+static void pic_write(void *opaque, target_phys_addr_t addr,
+                      uint64_t value, unsigned size)
 {
     HeathrowPICS *s = opaque;
     HeathrowPIC *pic;
     unsigned int n;
 
-    value = bswap32(value);
-#ifdef DEBUG
-    printf("pic_writel: %08x: %08x\n",
-           addr, value);
-#endif
     n = ((addr & 0xfff) - 0x10) >> 4;
+    PIC_DPRINTF("writel: " TARGET_FMT_plx " %u: %08x\n", addr, n, value);
     if (n >= 2)
         return;
     pic = &s->pics[n];
@@ -82,13 +91,14 @@ static void pic_writel (void *opaque, target_phys_addr_t addr, uint32_t value)
     }
 }
 
-static uint32_t pic_readl (void *opaque, target_phys_addr_t addr)
+static uint64_t pic_read(void *opaque, target_phys_addr_t addr,
+                         unsigned size)
 {
     HeathrowPICS *s = opaque;
     HeathrowPIC *pic;
     unsigned int n;
     uint32_t value;
-    
+
     n = ((addr & 0xfff) - 0x10) >> 4;
     if (n >= 2) {
         value = 0;
@@ -109,26 +119,15 @@ static uint32_t pic_readl (void *opaque, target_phys_addr_t addr)
             break;
         }
     }
-#ifdef DEBUG
-    printf("pic_readl: %08x: %08x\n",
-           addr, value);
-#endif
-    value = bswap32(value);
+    PIC_DPRINTF("readl: " TARGET_FMT_plx " %u: %08x\n", addr, n, value);
     return value;
 }
 
-static CPUWriteMemoryFunc *pic_write[] = {
-    &pic_writel,
-    &pic_writel,
-    &pic_writel,
+static const MemoryRegionOps heathrow_pic_ops = {
+    .read = pic_read,
+    .write = pic_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
 };
-
-static CPUReadMemoryFunc *pic_read[] = {
-    &pic_readl,
-    &pic_readl,
-    &pic_readl,
-};
-
 
 static void heathrow_pic_set_irq(void *opaque, int num, int level)
 {
@@ -140,7 +139,7 @@ static void heathrow_pic_set_irq(void *opaque, int num, int level)
     {
         static int last_level[64];
         if (last_level[num] != level) {
-            printf("set_irq: num=0x%02x level=%d\n", num, level);
+            PIC_DPRINTF("set_irq: num=0x%02x level=%d\n", num, level);
             last_level[num] = level;
         }
     }
@@ -156,13 +155,61 @@ static void heathrow_pic_set_irq(void *opaque, int num, int level)
     heathrow_pic_update(s);
 }
 
-qemu_irq *heathrow_pic_init(int *pmem_index)
+static const VMStateDescription vmstate_heathrow_pic_one = {
+    .name = "heathrow_pic_one",
+    .version_id = 0,
+    .minimum_version_id = 0,
+    .minimum_version_id_old = 0,
+    .fields      = (VMStateField[]) {
+        VMSTATE_UINT32(events, HeathrowPIC),
+        VMSTATE_UINT32(mask, HeathrowPIC),
+        VMSTATE_UINT32(levels, HeathrowPIC),
+        VMSTATE_UINT32(level_triggered, HeathrowPIC),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static const VMStateDescription vmstate_heathrow_pic = {
+    .name = "heathrow_pic",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .minimum_version_id_old = 1,
+    .fields      = (VMStateField[]) {
+        VMSTATE_STRUCT_ARRAY(pics, HeathrowPICS, 2, 1,
+                             vmstate_heathrow_pic_one, HeathrowPIC),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static void heathrow_pic_reset_one(HeathrowPIC *s)
 {
-    HeathrowPICS *s;
-    
-    s = qemu_mallocz(sizeof(HeathrowPICS));
+    memset(s, '\0', sizeof(HeathrowPIC));
+}
+
+static void heathrow_pic_reset(void *opaque)
+{
+    HeathrowPICS *s = opaque;
+
+    heathrow_pic_reset_one(&s->pics[0]);
+    heathrow_pic_reset_one(&s->pics[1]);
+
     s->pics[0].level_triggered = 0;
     s->pics[1].level_triggered = 0x1ff00000;
-    *pmem_index = cpu_register_io_memory(0, pic_read, pic_write, s);
+}
+
+qemu_irq *heathrow_pic_init(MemoryRegion **pmem,
+                            int nb_cpus, qemu_irq **irqs)
+{
+    HeathrowPICS *s;
+
+    s = g_malloc0(sizeof(HeathrowPICS));
+    /* only 1 CPU */
+    s->irqs = irqs[0];
+    memory_region_init_io(&s->mem, &heathrow_pic_ops, s,
+                          "heathrow-pic", 0x1000);
+    *pmem = &s->mem;
+
+    vmstate_register(NULL, -1, &vmstate_heathrow_pic, s);
+    qemu_register_reset(heathrow_pic_reset, s);
     return qemu_allocate_irqs(heathrow_pic_set_irq, s, 64);
 }

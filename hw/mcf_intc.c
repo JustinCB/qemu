@@ -1,11 +1,12 @@
-/* 
+/*
  * ColdFire Interrupt Controller emulation.
  *
  * Copyright (c) 2007 CodeSourcery.
  *
- * This code is licenced under the GPL
+ * This code is licensed under the GPL
  */
-#include "vl.h"
+#include "hw.h"
+#include "mcf.h"
 
 typedef struct {
     uint64_t ipr;
@@ -66,7 +67,7 @@ static uint32_t mcf_intc_read(void *opaque, target_phys_addr_t addr)
     case 0xe1: case 0xe2: case 0xe3: case 0xe4:
     case 0xe5: case 0xe6: case 0xe7:
         /* LnIACK */
-        cpu_abort(cpu_single_env, "mcf_intc_read: LnIACK not implemented\n");
+        hw_error("mcf_intc_read: LnIACK not implemented\n");
     default:
         return 0;
     }
@@ -98,8 +99,7 @@ static void mcf_intc_write(void *opaque, target_phys_addr_t addr, uint32_t val)
         s->imr = (s->imr & 0xffffffff00000000ull) | (uint32_t)val;
         break;
     default:
-        cpu_abort(cpu_single_env, "mcf_intc_write: Bad write offset %d\n",
-                  offset);
+        hw_error("mcf_intc_write: Bad write offset %d\n", offset);
         break;
     }
     mcf_intc_update(s);
@@ -127,13 +127,13 @@ static void mcf_intc_reset(mcf_intc_state *s)
     s->active_vector = 24;
 }
 
-static CPUReadMemoryFunc *mcf_intc_readfn[] = {
+static CPUReadMemoryFunc * const mcf_intc_readfn[] = {
    mcf_intc_read,
    mcf_intc_read,
    mcf_intc_read
 };
 
-static CPUWriteMemoryFunc *mcf_intc_writefn[] = {
+static CPUWriteMemoryFunc * const mcf_intc_writefn[] = {
    mcf_intc_write,
    mcf_intc_write,
    mcf_intc_write
@@ -144,12 +144,13 @@ qemu_irq *mcf_intc_init(target_phys_addr_t base, CPUState *env)
     mcf_intc_state *s;
     int iomemtype;
 
-    s = qemu_mallocz(sizeof(mcf_intc_state));
+    s = g_malloc0(sizeof(mcf_intc_state));
     s->env = env;
     mcf_intc_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, mcf_intc_readfn,
-                                       mcf_intc_writefn, s);
+    iomemtype = cpu_register_io_memory(mcf_intc_readfn,
+                                       mcf_intc_writefn, s,
+                                       DEVICE_NATIVE_ENDIAN);
     cpu_register_physical_memory(base, 0x100, iomemtype);
 
     return qemu_allocate_irqs(mcf_intc_set_irq, s, 64);

@@ -14,8 +14,7 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <fcntl.h>
 #include <stdio.h>
@@ -34,9 +33,9 @@
 //#define DEBUG_COMMPAGE
 
 #ifdef DEBUG_COMMPAGE
-# define DPRINTF(...) do { if(loglevel) fprintf(logfile, __VA_ARGS__); printf(__VA_ARGS__); } while(0)
+# define DPRINTF(...) do { qemu_log(__VA_ARGS__); printf(__VA_ARGS__); } while(0)
 #else
-# define DPRINTF(...) do { if(loglevel) fprintf(logfile, __VA_ARGS__); } while(0)
+# define DPRINTF(...) do { qemu_log(__VA_ARGS__); } while(0)
 #endif
 
 /********************************************************************
@@ -180,7 +179,7 @@ static inline void install_commpage_backdoor_for_entry(struct commpage_entry ent
  */
 void commpage_init(void)
 {
-#if (defined(__i386__) ^ defined(TARGET_I386)) || (defined(__powerpc__) ^ defined(TARGET_PPC))
+#if (defined(__i386__) ^ defined(TARGET_I386)) || (defined(_ARCH_PPC) ^ defined(TARGET_PPC))
     int i;
     void * commpage = (void *)target_mmap( COMMPAGE_START, COMMPAGE_SIZE,
                            PROT_WRITE | PROT_READ, MAP_ANONYMOUS | MAP_FIXED, -1, 0);
@@ -191,7 +190,7 @@ void commpage_init(void)
 
     /* XXX: commpage data not handled */
 
-    for(i = 0; i < sizeof(commpage_entries)/sizeof(commpage_entries[0]); i++)
+    for(i = 0; i < ARRAY_SIZE(commpage_entries); i++)
         install_commpage_backdoor_for_entry(commpage_entries[i]);
 #else
     /* simply map our pages so they can be executed
@@ -212,7 +211,7 @@ void do_compare_and_swap32(void *cpu_env, int num)
     uint32_t *value = (uint32_t*)((CPUX86State*)cpu_env)->regs[R_ECX];
     DPRINTF("commpage: compare_and_swap32(%x,new,%p)\n", old, value);
 
-    if(value && old == tswap32(*value))
+    if(old == tswap32(*value))
     {
         uint32_t new = ((CPUX86State*)cpu_env)->regs[R_EDX];
         *value = tswap32(new);
@@ -238,7 +237,7 @@ void do_compare_and_swap64(void *cpu_env, int num)
     uint64_t *value = (uint64_t*)((CPUX86State*)cpu_env)->regs[R_ESI];
     old = (uint64_t)((uint64_t)((CPUX86State*)cpu_env)->regs[R_EDX]) << 32 | (uint64_t)((CPUX86State*)cpu_env)->regs[R_EAX];
 
-    DPRINTF("commpage: compare_and_swap64(%llx,new,%p)\n", old, value);
+    DPRINTF("commpage: compare_and_swap64(%" PRIx64 ",new,%p)\n", old, value);
     swapped_val = tswap64(*value);
 
     if(old == swapped_val)
@@ -329,7 +328,7 @@ do_commpage(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uint32_t arg3,
 
     num = num-COMMPAGE_START-2;
 
-    for(i = 0; i < sizeof(commpage_entries)/sizeof(commpage_entries[0]); i++) {
+    for(i = 0; i < ARRAY_SIZE(commpage_entries); i++) {
         if( num == commpage_code_num(&commpage_entries[i]) )
         {
             DPRINTF("commpage: %s %s\n", commpage_entries[i].name, commpage_is_indirect(&commpage_entries[i]) ? "[indirect]" : "[direct]");

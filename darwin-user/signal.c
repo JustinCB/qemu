@@ -14,15 +14,14 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
-#include <unistd.h>
 #include <signal.h>
+#include <unistd.h>
 #include <errno.h>
 #include <sys/ucontext.h>
 
@@ -33,9 +32,8 @@
 #undef uc_link
 #endif
 
-#include <signal.h>
-
 #include "qemu.h"
+#include "qemu-common.h"
 
 #define DEBUG_SIGNAL
 
@@ -54,7 +52,7 @@ struct emulated_sigaction {
                              first signal, we put it here */
 };
 
-struct sigaltstack target_sigaltstack_used = {
+static stack_t target_sigaltstack_used = {
     0, 0, SA_DISABLE
 };
 
@@ -131,7 +129,7 @@ static inline void free_sigqueue(struct sigqueue *q)
 }
 
 /* abort execution with signal */
-void __attribute((noreturn)) force_sig(int sig)
+void QEMU_NORETURN force_sig(int sig)
 {
     int host_sig;
     host_sig = target_to_host_signal(sig);
@@ -198,11 +196,7 @@ static void host_signal_handler(int host_signum, siginfo_t *info,
 
     /* the CPU emulator uses some host signals to detect exceptions,
        we we forward to it some signals */
-    if (host_signum == SIGSEGV || host_signum == SIGBUS
-#if defined(TARGET_I386) && defined(USE_CODE_COPY)
-        || host_signum == SIGFPE
-#endif
-        ) {
+    if (host_signum == SIGSEGV || host_signum == SIGBUS) {
         if (cpu_signal_handler(host_signum, (void*)info, puc))
             return;
     }
@@ -217,11 +211,11 @@ static void host_signal_handler(int host_signum, siginfo_t *info,
 #endif
     if (queue_signal(sig, &tinfo) == 1) {
         /* interrupt the virtual CPU as soon as possible */
-        cpu_interrupt(global_env, CPU_INTERRUPT_EXIT);
+        cpu_exit(global_env);
     }
 }
 
-int do_sigaltstack(const struct sigaltstack *ss, struct sigaltstack *oss)
+int do_sigaltstack(const stack_t *ss, stack_t *oss)
 {
     /* XXX: test errors */
     if(oss)
@@ -326,7 +320,6 @@ static void setup_frame(int sig, struct emulated_sigaction *ka,
 			void *set, CPUState *env)
 {
 	void *frame;
-	int i, err = 0;
 
     fprintf(stderr, "setup_frame %d\n", sig);
 	frame = get_sigframe(ka, env, sizeof(*frame));
@@ -459,5 +452,3 @@ handle_signal:
     if (q != &k->info)
         free_sigqueue(q);
 }
-
-

@@ -5,7 +5,6 @@
 #include <errno.h>
 
 #include "cpu.h"
-#include "exec-all.h"
 #include "disas.h"
 
 /* Filled in by elfload.c.  Simplistic, but will do for now. */
@@ -14,11 +13,8 @@ struct syminfo *syminfos = NULL;
 /* Get LENGTH bytes from info's buffer, at target address memaddr.
    Transfer them to myaddr.  */
 int
-buffer_read_memory (memaddr, myaddr, length, info)
-     bfd_vma memaddr;
-     bfd_byte *myaddr;
-     int length;
-     struct disassemble_info *info;
+buffer_read_memory(bfd_vma memaddr, bfd_byte *myaddr, int length,
+                   struct disassemble_info *info)
 {
     if (memaddr < info->buffer_vma
         || memaddr + length > info->buffer_vma + info->buffer_length)
@@ -36,20 +32,14 @@ target_read_memory (bfd_vma memaddr,
                     int length,
                     struct disassemble_info *info)
 {
-    int i;
-    for(i = 0; i < length; i++) {
-        myaddr[i] = ldub_code(memaddr + i);
-    }
+    cpu_memory_rw_debug(cpu_single_env, memaddr, myaddr, length, 0);
     return 0;
 }
 
 /* Print an error message.  We can assume that this is in response to
    an error return from buffer_read_memory.  */
 void
-perror_memory (status, memaddr, info)
-     int status;
-     bfd_vma memaddr;
-     struct disassemble_info *info;
+perror_memory (int status, bfd_vma memaddr, struct disassemble_info *info)
 {
   if (status != EIO)
     /* Can't happen.  */
@@ -69,9 +59,7 @@ perror_memory (status, memaddr, info)
    addresses).  */
 
 void
-generic_print_address (addr, info)
-     bfd_vma addr;
-     struct disassemble_info *info;
+generic_print_address (bfd_vma addr, struct disassemble_info *info)
 {
     (*info->fprintf_func) (info->stream, "0x%" PRIx64, addr);
 }
@@ -79,11 +67,24 @@ generic_print_address (addr, info)
 /* Just return the given address.  */
 
 int
-generic_symbol_at_address (addr, info)
-     bfd_vma addr;
-     struct disassemble_info * info;
+generic_symbol_at_address (bfd_vma addr, struct disassemble_info *info)
 {
   return 1;
+}
+
+bfd_vma bfd_getl64 (const bfd_byte *addr)
+{
+  unsigned long long v;
+
+  v = (unsigned long long) addr[0];
+  v |= (unsigned long long) addr[1] << 8;
+  v |= (unsigned long long) addr[2] << 16;
+  v |= (unsigned long long) addr[3] << 24;
+  v |= (unsigned long long) addr[4] << 32;
+  v |= (unsigned long long) addr[5] << 40;
+  v |= (unsigned long long) addr[6] << 48;
+  v |= (unsigned long long) addr[7] << 56;
+  return (bfd_vma) v;
 }
 
 bfd_vma bfd_getl32 (const bfd_byte *addr)
@@ -136,8 +137,8 @@ print_insn_thumb1(bfd_vma pc, disassemble_info *info)
 
 /* Disassemble this for me please... (debugging). 'flags' has the following
    values:
-    i386 - nonzero means 16 bit code
-    arm  - nonzero means thumb code 
+    i386 - 1 means 16 bit code, 2 means 64 bit code
+    arm  - nonzero means thumb code
     ppc  - nonzero means little endian
     other targets - unused
  */
@@ -162,7 +163,7 @@ void target_disas(FILE *out, target_ulong code, target_ulong size, int flags)
 #if defined(TARGET_I386)
     if (flags == 2)
         disasm_info.mach = bfd_mach_x86_64;
-    else if (flags == 1) 
+    else if (flags == 1)
         disasm_info.mach = bfd_mach_i386_i8086;
     else
         disasm_info.mach = bfd_mach_i386_i386;
@@ -176,15 +177,20 @@ void target_disas(FILE *out, target_ulong code, target_ulong size, int flags)
     print_insn = print_insn_sparc;
 #ifdef TARGET_SPARC64
     disasm_info.mach = bfd_mach_sparc_v9b;
-#endif    
-#elif defined(TARGET_PPC)
-    if (flags)
-        disasm_info.endian = BFD_ENDIAN_LITTLE;
-#ifdef TARGET_PPC64
-    disasm_info.mach = bfd_mach_ppc64;
-#else
-    disasm_info.mach = bfd_mach_ppc;
 #endif
+#elif defined(TARGET_PPC)
+    if (flags >> 16)
+        disasm_info.endian = BFD_ENDIAN_LITTLE;
+    if (flags & 0xFFFF) {
+        /* If we have a precise definitions of the instructions set, use it */
+        disasm_info.mach = flags & 0xFFFF;
+    } else {
+#ifdef TARGET_PPC64
+        disasm_info.mach = bfd_mach_ppc64;
+#else
+        disasm_info.mach = bfd_mach_ppc;
+#endif
+    }
     print_insn = print_insn_ppc;
 #elif defined(TARGET_M68K)
     print_insn = print_insn_m68k;
@@ -198,15 +204,29 @@ void target_disas(FILE *out, target_ulong code, target_ulong size, int flags)
     disasm_info.mach = bfd_mach_sh4;
     print_insn = print_insn_sh;
 #elif defined(TARGET_ALPHA)
-    disasm_info.mach = bfd_mach_alpha;
+    disasm_info.mach = bfd_mach_alpha_ev6;
     print_insn = print_insn_alpha;
+#elif defined(TARGET_CRIS)
+    if (flags != 32) {
+        disasm_info.mach = bfd_mach_cris_v0_v10;
+        print_insn = print_insn_crisv10;
+    } else {
+        disasm_info.mach = bfd_mach_cris_v32;
+        print_insn = print_insn_crisv32;
+    }
+#elif defined(TARGET_S390X)
+    disasm_info.mach = bfd_mach_s390_64;
+    print_insn = print_insn_s390;
+#elif defined(TARGET_MICROBLAZE)
+    disasm_info.mach = bfd_arch_microblaze;
+    print_insn = print_insn_microblaze;
 #else
     fprintf(out, "0x" TARGET_FMT_lx
 	    ": Asm output not supported on this arch\n", code);
     return;
 #endif
 
-    for (pc = code; pc < code + size; pc += count) {
+    for (pc = code; size > 0; pc += count, size -= count) {
 	fprintf(out, "0x" TARGET_FMT_lx ":  ", pc);
 	count = print_insn(pc, &disasm_info);
 #if 0
@@ -224,6 +244,13 @@ void target_disas(FILE *out, target_ulong code, target_ulong size, int flags)
 	fprintf(out, "\n");
 	if (count < 0)
 	    break;
+        if (size < count) {
+            fprintf(out,
+                    "Disassembler disagrees with translator over instruction "
+                    "decoding\n"
+                    "Please report this to qemu-devel@nongnu.org\n");
+            break;
+        }
     }
 }
 
@@ -241,7 +268,7 @@ void disas(FILE *out, void *code, unsigned long size)
     disasm_info.buffer_vma = (unsigned long)code;
     disasm_info.buffer_length = size;
 
-#ifdef WORDS_BIGENDIAN
+#ifdef HOST_WORDS_BIGENDIAN
     disasm_info.endian = BFD_ENDIAN_BIG;
 #else
     disasm_info.endian = BFD_ENDIAN_LITTLE;
@@ -252,7 +279,7 @@ void disas(FILE *out, void *code, unsigned long size)
 #elif defined(__x86_64__)
     disasm_info.mach = bfd_mach_x86_64;
     print_insn = print_insn_i386;
-#elif defined(__powerpc__)
+#elif defined(_ARCH_PPC)
     print_insn = print_insn_ppc;
 #elif defined(__alpha__)
     print_insn = print_insn_alpha;
@@ -261,7 +288,7 @@ void disas(FILE *out, void *code, unsigned long size)
 #if defined(__sparc_v8plus__) || defined(__sparc_v8plusa__) || defined(__sparc_v9__)
     disasm_info.mach = bfd_mach_sparc_v9b;
 #endif
-#elif defined(__arm__) 
+#elif defined(__arm__)
     print_insn = print_insn_arm;
 #elif defined(__MIPSEB__)
     print_insn = print_insn_big_mips;
@@ -269,18 +296,19 @@ void disas(FILE *out, void *code, unsigned long size)
     print_insn = print_insn_little_mips;
 #elif defined(__m68k__)
     print_insn = print_insn_m68k;
+#elif defined(__s390__)
+    print_insn = print_insn_s390;
+#elif defined(__hppa__)
+    print_insn = print_insn_hppa;
+#elif defined(__ia64__)
+    print_insn = print_insn_ia64;
 #else
     fprintf(out, "0x%lx: Asm output not supported on this arch\n",
 	    (long) code);
     return;
 #endif
-    for (pc = (unsigned long)code; pc < (unsigned long)code + size; pc += count) {
+    for (pc = (unsigned long)code; size > 0; pc += count, size -= count) {
 	fprintf(out, "0x%08lx:  ", pc);
-#ifdef __arm__
-        /* since data is included in the code, it is better to
-           display code data too */
-        fprintf(out, "%08x  ", (int)bfd_getl32((const bfd_byte *)pc));
-#endif
 	count = print_insn(pc, &disasm_info);
 	fprintf(out, "\n");
 	if (count < 0)
@@ -291,75 +319,56 @@ void disas(FILE *out, void *code, unsigned long size)
 /* Look up symbol for debugging purpose.  Returns "" if unknown. */
 const char *lookup_symbol(target_ulong orig_addr)
 {
-    unsigned int i;
-    /* Hack, because we know this is x86. */
-    Elf32_Sym *sym;
+    const char *symbol = "";
     struct syminfo *s;
-    target_ulong addr;
-    
+
     for (s = syminfos; s; s = s->next) {
-	sym = s->disas_symtab;
-	for (i = 0; i < s->disas_num_syms; i++) {
-	    if (sym[i].st_shndx == SHN_UNDEF
-		|| sym[i].st_shndx >= SHN_LORESERVE)
-		continue;
-
-	    if (ELF_ST_TYPE(sym[i].st_info) != STT_FUNC)
-		continue;
-
-	    addr = sym[i].st_value;
-#if defined(TARGET_ARM) || defined (TARGET_MIPS)
-            /* The bottom address bit marks a Thumb or MIPS16 symbol.  */
-            addr &= ~(target_ulong)1;
-#endif
-	    if (orig_addr >= addr
-		&& orig_addr < addr + sym[i].st_size)
-		return s->disas_strtab + sym[i].st_name;
-	}
+        symbol = s->lookup_symbol(s, orig_addr);
+        if (symbol[0] != '\0') {
+            break;
+        }
     }
-    return "";
+
+    return symbol;
 }
 
 #if !defined(CONFIG_USER_ONLY)
 
-void term_vprintf(const char *fmt, va_list ap);
-void term_printf(const char *fmt, ...);
+#include "monitor.h"
 
 static int monitor_disas_is_physical;
 static CPUState *monitor_disas_env;
 
 static int
-monitor_read_memory (memaddr, myaddr, length, info)
-     bfd_vma memaddr;
-     bfd_byte *myaddr;
-     int length;
-     struct disassemble_info *info;
+monitor_read_memory (bfd_vma memaddr, bfd_byte *myaddr, int length,
+                     struct disassemble_info *info)
 {
     if (monitor_disas_is_physical) {
-        cpu_physical_memory_rw(memaddr, myaddr, length, 0);
+        cpu_physical_memory_read(memaddr, myaddr, length);
     } else {
         cpu_memory_rw_debug(monitor_disas_env, memaddr,myaddr, length, 0);
     }
     return 0;
 }
 
-static int monitor_fprintf(FILE *stream, const char *fmt, ...)
+static int GCC_FMT_ATTR(2, 3)
+monitor_fprintf(FILE *stream, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    term_vprintf(fmt, ap);
+    monitor_vprintf((Monitor *)stream, fmt, ap);
     va_end(ap);
     return 0;
 }
 
-void monitor_disas(CPUState *env,
+void monitor_disas(Monitor *mon, CPUState *env,
                    target_ulong pc, int nb_insn, int is_physical, int flags)
 {
     int count, i;
     struct disassemble_info disasm_info;
     int (*print_insn)(bfd_vma pc, disassemble_info *info);
 
-    INIT_DISASSEMBLE_INFO(disasm_info, NULL, monitor_fprintf);
+    INIT_DISASSEMBLE_INFO(disasm_info, (FILE *)mon, monitor_fprintf);
 
     monitor_disas_env = env;
     monitor_disas_is_physical = is_physical;
@@ -375,13 +384,15 @@ void monitor_disas(CPUState *env,
 #if defined(TARGET_I386)
     if (flags == 2)
         disasm_info.mach = bfd_mach_x86_64;
-    else if (flags == 1) 
+    else if (flags == 1)
         disasm_info.mach = bfd_mach_i386_i8086;
     else
         disasm_info.mach = bfd_mach_i386_i386;
     print_insn = print_insn_i386;
 #elif defined(TARGET_ARM)
     print_insn = print_insn_arm;
+#elif defined(TARGET_ALPHA)
+    print_insn = print_insn_alpha;
 #elif defined(TARGET_SPARC)
     print_insn = print_insn_sparc;
 #ifdef TARGET_SPARC64
@@ -402,16 +413,22 @@ void monitor_disas(CPUState *env,
 #else
     print_insn = print_insn_little_mips;
 #endif
+#elif defined(TARGET_SH4)
+    disasm_info.mach = bfd_mach_sh4;
+    print_insn = print_insn_sh;
+#elif defined(TARGET_S390X)
+    disasm_info.mach = bfd_mach_s390_64;
+    print_insn = print_insn_s390;
 #else
-    term_printf("0x" TARGET_FMT_lx
-		": Asm output not supported on this arch\n", pc);
+    monitor_printf(mon, "0x" TARGET_FMT_lx
+                   ": Asm output not supported on this arch\n", pc);
     return;
 #endif
 
     for(i = 0; i < nb_insn; i++) {
-	term_printf("0x" TARGET_FMT_lx ":  ", pc);
+	monitor_printf(mon, "0x" TARGET_FMT_lx ":  ", pc);
 	count = print_insn(pc, &disasm_info);
-	term_printf("\n");
+	monitor_printf(mon, "\n");
 	if (count < 0)
 	    break;
         pc += count;

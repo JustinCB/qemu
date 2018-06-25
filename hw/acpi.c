@@ -1,8 +1,8 @@
 /*
  * ACPI implementation
- * 
+ *
  * Copyright (c) 2006 Fabrice Bellard
- * 
+ *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License version 2 as published by the Free Software Foundation.
@@ -13,487 +13,430 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>
  */
-#include "vl.h"
+#include "sysemu.h"
+#include "hw.h"
+#include "pc.h"
+#include "acpi.h"
 
-//#define DEBUG
+struct acpi_table_header {
+    uint16_t _length;         /* our length, not actual part of the hdr */
+                              /* XXX why we have 2 length fields here? */
+    char sig[4];              /* ACPI signature (4 ASCII characters) */
+    uint32_t length;          /* Length of table, in bytes, including header */
+    uint8_t revision;         /* ACPI Specification minor version # */
+    uint8_t checksum;         /* To make sum of entire table == 0 */
+    char oem_id[6];           /* OEM identification */
+    char oem_table_id[8];     /* OEM table identification */
+    uint32_t oem_revision;    /* OEM revision number */
+    char asl_compiler_id[4];  /* ASL compiler vendor ID */
+    uint32_t asl_compiler_revision; /* ASL compiler revision number */
+} QEMU_PACKED;
 
-/* i82731AB (PIIX4) compatible power management function */
-#define PM_FREQ 3579545
+#define ACPI_TABLE_HDR_SIZE sizeof(struct acpi_table_header)
+#define ACPI_TABLE_PFX_SIZE sizeof(uint16_t)  /* size of the extra prefix */
 
-#define ACPI_DBG_IO_ADDR  0xb044
+static const char dfl_hdr[ACPI_TABLE_HDR_SIZE] =
+    "\0\0"                   /* fake _length (2) */
+    "QEMU\0\0\0\0\1\0"       /* sig (4), len(4), revno (1), csum (1) */
+    "QEMUQEQEMUQEMU\1\0\0\0" /* OEM id (6), table (8), revno (4) */
+    "QEMU\1\0\0\0"           /* ASL compiler ID (4), version (4) */
+    ;
 
-typedef struct PIIX4PMState {
-    PCIDevice dev;
-    uint16_t pmsts;
-    uint16_t pmen;
-    uint16_t pmcntrl;
-    uint8_t apmc;
-    uint8_t apms;
-    QEMUTimer *tmr_timer;
-    int64_t tmr_overflow_time;
-    i2c_bus *smbus;
-    uint8_t smb_stat;
-    uint8_t smb_ctl;
-    uint8_t smb_cmd;
-    uint8_t smb_addr;
-    uint8_t smb_data0;
-    uint8_t smb_data1;
-    uint8_t smb_data[32];
-    uint8_t smb_index;
-} PIIX4PMState;
+char *acpi_tables;
+size_t acpi_tables_len;
 
-#define RTC_EN (1 << 10)
-#define PWRBTN_EN (1 << 8)
-#define GBL_EN (1 << 5)
-#define TMROF_EN (1 << 0)
-
-#define SCI_EN (1 << 0)
-
-#define SUS_EN (1 << 13)
-
-#define SMBHSTSTS 0x00
-#define SMBHSTCNT 0x02
-#define SMBHSTCMD 0x03
-#define SMBHSTADD 0x04
-#define SMBHSTDAT0 0x05
-#define SMBHSTDAT1 0x06
-#define SMBBLKDAT 0x07
-
-static uint32_t get_pmtmr(PIIX4PMState *s)
+static int acpi_checksum(const uint8_t *data, int len)
 {
-    uint32_t d;
-    d = muldiv64(qemu_get_clock(vm_clock), PM_FREQ, ticks_per_sec);
+    int sum, i;
+    sum = 0;
+    for (i = 0; i < len; i++) {
+        sum += data[i];
+    }
+    return (-sum) & 0xff;
+}
+
+/* like strncpy() but zero-fills the tail of destination */
+static void strzcpy(char *dst, const char *src, size_t size)
+{
+    size_t len = strlen(src);
+    if (len >= size) {
+        len = size;
+    } else {
+      memset(dst + len, 0, size - len);
+    }
+    memcpy(dst, src, len);
+}
+
+/* XXX fixme: this function uses obsolete argument parsing interface */
+int acpi_table_add(const char *t)
+{
+    char buf[1024], *p, *f;
+    unsigned long val;
+    size_t len, start, allen;
+    bool has_header;
+    int changed;
+    int r;
+    struct acpi_table_header hdr;
+
+    r = 0;
+    r |= get_param_value(buf, sizeof(buf), "data", t) ? 1 : 0;
+    r |= get_param_value(buf, sizeof(buf), "file", t) ? 2 : 0;
+    switch (r) {
+    case 0:
+        buf[0] = '\0';
+        /* fallthrough for default behavior */
+    case 1:
+        has_header = false;
+        break;
+    case 2:
+        has_header = true;
+        break;
+    default:
+        fprintf(stderr, "acpitable: both data and file are specified\n");
+        return -1;
+    }
+
+    if (!acpi_tables) {
+        allen = sizeof(uint16_t);
+        acpi_tables = g_malloc0(allen);
+    } else {
+        allen = acpi_tables_len;
+    }
+
+    start = allen;
+    acpi_tables = g_realloc(acpi_tables, start + ACPI_TABLE_HDR_SIZE);
+    allen += has_header ? ACPI_TABLE_PFX_SIZE : ACPI_TABLE_HDR_SIZE;
+
+    /* now read in the data files, reallocating buffer as needed */
+
+    for (f = strtok(buf, ":"); f; f = strtok(NULL, ":")) {
+        int fd = open(f, O_RDONLY);
+
+        if (fd < 0) {
+            fprintf(stderr, "can't open file %s: %s\n", f, strerror(errno));
+            return -1;
+        }
+
+        for (;;) {
+            char data[8192];
+            r = read(fd, data, sizeof(data));
+            if (r == 0) {
+                break;
+            } else if (r > 0) {
+                acpi_tables = g_realloc(acpi_tables, allen + r);
+                memcpy(acpi_tables + allen, data, r);
+                allen += r;
+            } else if (errno != EINTR) {
+                fprintf(stderr, "can't read file %s: %s\n",
+                        f, strerror(errno));
+                close(fd);
+                return -1;
+            }
+        }
+
+        close(fd);
+    }
+
+    /* now fill in the header fields */
+
+    f = acpi_tables + start;   /* start of the table */
+    changed = 0;
+
+    /* copy the header to temp place to align the fields */
+    memcpy(&hdr, has_header ? f : dfl_hdr, ACPI_TABLE_HDR_SIZE);
+
+    /* length of the table minus our prefix */
+    len = allen - start - ACPI_TABLE_PFX_SIZE;
+
+    hdr._length = cpu_to_le16(len);
+
+    if (get_param_value(buf, sizeof(buf), "sig", t)) {
+        strzcpy(hdr.sig, buf, sizeof(hdr.sig));
+        ++changed;
+    }
+
+    /* length of the table including header, in bytes */
+    if (has_header) {
+        /* check if actual length is correct */
+        val = le32_to_cpu(hdr.length);
+        if (val != len) {
+            fprintf(stderr,
+                "warning: acpitable has wrong length,"
+                " header says %lu, actual size %zu bytes\n",
+                val, len);
+            ++changed;
+        }
+    }
+    /* we may avoid putting length here if has_header is true */
+    hdr.length = cpu_to_le32(len);
+
+    if (get_param_value(buf, sizeof(buf), "rev", t)) {
+        val = strtoul(buf, &p, 0);
+        if (val > 255 || *p) {
+            fprintf(stderr, "acpitable: \"rev=%s\" is invalid\n", buf);
+            return -1;
+        }
+        hdr.revision = (uint8_t)val;
+        ++changed;
+    }
+
+    if (get_param_value(buf, sizeof(buf), "oem_id", t)) {
+        strzcpy(hdr.oem_id, buf, sizeof(hdr.oem_id));
+        ++changed;
+    }
+
+    if (get_param_value(buf, sizeof(buf), "oem_table_id", t)) {
+        strzcpy(hdr.oem_table_id, buf, sizeof(hdr.oem_table_id));
+        ++changed;
+    }
+
+    if (get_param_value(buf, sizeof(buf), "oem_rev", t)) {
+        val = strtol(buf, &p, 0);
+        if (*p) {
+            fprintf(stderr, "acpitable: \"oem_rev=%s\" is invalid\n", buf);
+            return -1;
+        }
+        hdr.oem_revision = cpu_to_le32(val);
+        ++changed;
+    }
+
+    if (get_param_value(buf, sizeof(buf), "asl_compiler_id", t)) {
+        strzcpy(hdr.asl_compiler_id, buf, sizeof(hdr.asl_compiler_id));
+        ++changed;
+    }
+
+    if (get_param_value(buf, sizeof(buf), "asl_compiler_rev", t)) {
+        val = strtol(buf, &p, 0);
+        if (*p) {
+            fprintf(stderr, "acpitable: \"%s=%s\" is invalid\n",
+                    "asl_compiler_rev", buf);
+            return -1;
+        }
+        hdr.asl_compiler_revision = cpu_to_le32(val);
+        ++changed;
+    }
+
+    if (!has_header && !changed) {
+        fprintf(stderr, "warning: acpitable: no table headers are specified\n");
+    }
+
+
+    /* now calculate checksum of the table, complete with the header */
+    /* we may as well leave checksum intact if has_header is true */
+    /* alternatively there may be a way to set cksum to a given value */
+    hdr.checksum = 0;    /* for checksum calculation */
+
+    /* put header back */
+    memcpy(f, &hdr, sizeof(hdr));
+
+    if (changed || !has_header || 1) {
+        ((struct acpi_table_header *)f)->checksum =
+            acpi_checksum((uint8_t *)f + ACPI_TABLE_PFX_SIZE, len);
+    }
+
+    /* increase number of tables */
+    (*(uint16_t *)acpi_tables) =
+        cpu_to_le32(le32_to_cpu(*(uint16_t *)acpi_tables) + 1);
+
+    acpi_tables_len = allen;
+    return 0;
+
+}
+
+/* ACPI PM1a EVT */
+uint16_t acpi_pm1_evt_get_sts(ACPIPM1EVT *pm1, int64_t overflow_time)
+{
+    int64_t d = acpi_pm_tmr_get_clock();
+    if (d >= overflow_time) {
+        pm1->sts |= ACPI_BITMASK_TIMER_STATUS;
+    }
+    return pm1->sts;
+}
+
+void acpi_pm1_evt_write_sts(ACPIPM1EVT *pm1, ACPIPMTimer *tmr, uint16_t val)
+{
+    uint16_t pm1_sts = acpi_pm1_evt_get_sts(pm1, tmr->overflow_time);
+    if (pm1_sts & val & ACPI_BITMASK_TIMER_STATUS) {
+        /* if TMRSTS is reset, then compute the new overflow time */
+        acpi_pm_tmr_calc_overflow_time(tmr);
+    }
+    pm1->sts &= ~val;
+}
+
+void acpi_pm1_evt_power_down(ACPIPM1EVT *pm1, ACPIPMTimer *tmr)
+{
+    if (!pm1) {
+        qemu_system_shutdown_request();
+    } else if (pm1->en & ACPI_BITMASK_POWER_BUTTON_ENABLE) {
+        pm1->sts |= ACPI_BITMASK_POWER_BUTTON_STATUS;
+        tmr->update_sci(tmr);
+    }
+}
+
+void acpi_pm1_evt_reset(ACPIPM1EVT *pm1)
+{
+    pm1->sts = 0;
+    pm1->en = 0;
+}
+
+/* ACPI PM_TMR */
+void acpi_pm_tmr_update(ACPIPMTimer *tmr, bool enable)
+{
+    int64_t expire_time;
+
+    /* schedule a timer interruption if needed */
+    if (enable) {
+        expire_time = muldiv64(tmr->overflow_time, get_ticks_per_sec(),
+                               PM_TIMER_FREQUENCY);
+        qemu_mod_timer(tmr->timer, expire_time);
+    } else {
+        qemu_del_timer(tmr->timer);
+    }
+}
+
+void acpi_pm_tmr_calc_overflow_time(ACPIPMTimer *tmr)
+{
+    int64_t d = acpi_pm_tmr_get_clock();
+    tmr->overflow_time = (d + 0x800000LL) & ~0x7fffffLL;
+}
+
+uint32_t acpi_pm_tmr_get(ACPIPMTimer *tmr)
+{
+    uint32_t d = acpi_pm_tmr_get_clock();;
     return d & 0xffffff;
 }
 
-static int get_pmsts(PIIX4PMState *s)
+static void acpi_pm_tmr_timer(void *opaque)
 {
-    int64_t d;
-    int pmsts;
-    pmsts = s->pmsts;
-    d = muldiv64(qemu_get_clock(vm_clock), PM_FREQ, ticks_per_sec);
-    if (d >= s->tmr_overflow_time)
-        s->pmsts |= TMROF_EN;
-    return pmsts;
+    ACPIPMTimer *tmr = opaque;
+    tmr->update_sci(tmr);
 }
 
-static void pm_update_sci(PIIX4PMState *s)
+void acpi_pm_tmr_init(ACPIPMTimer *tmr, acpi_update_sci_fn update_sci)
 {
-    int sci_level, pmsts;
-    int64_t expire_time;
-    
-    pmsts = get_pmsts(s);
-    sci_level = (((pmsts & s->pmen) & 
-                  (RTC_EN | PWRBTN_EN | GBL_EN | TMROF_EN)) != 0);
-    qemu_set_irq(s->dev.irq[0], sci_level);
-    /* schedule a timer interruption if needed */
-    if ((s->pmen & TMROF_EN) && !(pmsts & TMROF_EN)) {
-        expire_time = muldiv64(s->tmr_overflow_time, ticks_per_sec, PM_FREQ);
-        qemu_mod_timer(s->tmr_timer, expire_time);
+    tmr->update_sci = update_sci;
+    tmr->timer = qemu_new_timer_ns(vm_clock, acpi_pm_tmr_timer, tmr);
+}
+
+void acpi_pm_tmr_reset(ACPIPMTimer *tmr)
+{
+    tmr->overflow_time = 0;
+    qemu_del_timer(tmr->timer);
+}
+
+/* ACPI PM1aCNT */
+void acpi_pm1_cnt_init(ACPIPM1CNT *pm1_cnt, qemu_irq cmos_s3)
+{
+    pm1_cnt->cmos_s3 = cmos_s3;
+}
+
+void acpi_pm1_cnt_write(ACPIPM1EVT *pm1a, ACPIPM1CNT *pm1_cnt, uint16_t val)
+{
+    pm1_cnt->cnt = val & ~(ACPI_BITMASK_SLEEP_ENABLE);
+
+    if (val & ACPI_BITMASK_SLEEP_ENABLE) {
+        /* change suspend type */
+        uint16_t sus_typ = (val >> 10) & 7;
+        switch(sus_typ) {
+        case 0: /* soft power off */
+            qemu_system_shutdown_request();
+            break;
+        case 1:
+            /* ACPI_BITMASK_WAKE_STATUS should be set on resume.
+               Pretend that resume was caused by power button */
+            pm1a->sts |=
+                (ACPI_BITMASK_WAKE_STATUS | ACPI_BITMASK_POWER_BUTTON_STATUS);
+            qemu_system_reset_request();
+            qemu_irq_raise(pm1_cnt->cmos_s3);
+        default:
+            break;
+        }
+    }
+}
+
+void acpi_pm1_cnt_update(ACPIPM1CNT *pm1_cnt,
+                         bool sci_enable, bool sci_disable)
+{
+    /* ACPI specs 3.0, 4.7.2.5 */
+    if (sci_enable) {
+        pm1_cnt->cnt |= ACPI_BITMASK_SCI_ENABLE;
+    } else if (sci_disable) {
+        pm1_cnt->cnt &= ~ACPI_BITMASK_SCI_ENABLE;
+    }
+}
+
+void acpi_pm1_cnt_reset(ACPIPM1CNT *pm1_cnt)
+{
+    pm1_cnt->cnt = 0;
+    if (pm1_cnt->cmos_s3) {
+        qemu_irq_lower(pm1_cnt->cmos_s3);
+    }
+}
+
+/* ACPI GPE */
+void acpi_gpe_init(ACPIGPE *gpe, uint8_t len)
+{
+    gpe->len = len;
+    gpe->sts = g_malloc0(len / 2);
+    gpe->en = g_malloc0(len / 2);
+}
+
+void acpi_gpe_blk(ACPIGPE *gpe, uint32_t blk)
+{
+    gpe->blk = blk;
+}
+
+void acpi_gpe_reset(ACPIGPE *gpe)
+{
+    memset(gpe->sts, 0, gpe->len / 2);
+    memset(gpe->en, 0, gpe->len / 2);
+}
+
+static uint8_t *acpi_gpe_ioport_get_ptr(ACPIGPE *gpe, uint32_t addr)
+{
+    uint8_t *cur = NULL;
+
+    if (addr < gpe->len / 2) {
+        cur = gpe->sts + addr;
+    } else if (addr < gpe->len) {
+        cur = gpe->en + addr - gpe->len / 2;
     } else {
-        qemu_del_timer(s->tmr_timer);
+        abort();
     }
+
+    return cur;
 }
 
-static void pm_tmr_timer(void *opaque)
+void acpi_gpe_ioport_writeb(ACPIGPE *gpe, uint32_t addr, uint32_t val)
 {
-    PIIX4PMState *s = opaque;
-    pm_update_sci(s);
-}
+    uint8_t *cur;
 
-static void pm_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
-{
-    PIIX4PMState *s = opaque;
-    addr &= 0x3f;
-    switch(addr) {
-    case 0x00:
-        {
-            int64_t d;
-            int pmsts;
-            pmsts = get_pmsts(s);
-            if (pmsts & val & TMROF_EN) {
-                /* if TMRSTS is reset, then compute the new overflow time */
-                d = muldiv64(qemu_get_clock(vm_clock), PM_FREQ, ticks_per_sec);
-                s->tmr_overflow_time = (d + 0x800000LL) & ~0x7fffffLL;
-            }
-            s->pmsts &= ~val;
-            pm_update_sci(s);
-        }
-        break;
-    case 0x02:
-        s->pmen = val;
-        pm_update_sci(s);
-        break;
-    case 0x04:
-        {
-            int sus_typ;
-            s->pmcntrl = val & ~(SUS_EN);
-            if (val & SUS_EN) {
-                /* change suspend type */
-                sus_typ = (val >> 10) & 3;
-                switch(sus_typ) {
-                case 0: /* soft power off */
-                    qemu_system_shutdown_request();
-                    break;
-                default:
-                    break;
-                }
-            }
-        }
-        break;
-    default:
-        break;
-    }
-#ifdef DEBUG
-    printf("PM writew port=0x%04x val=0x%04x\n", addr, val);
-#endif
-}
-
-static uint32_t pm_ioport_readw(void *opaque, uint32_t addr)
-{
-    PIIX4PMState *s = opaque;
-    uint32_t val;
-
-    addr &= 0x3f;
-    switch(addr) {
-    case 0x00:
-        val = get_pmsts(s);
-        break;
-    case 0x02:
-        val = s->pmen;
-        break;
-    case 0x04:
-        val = s->pmcntrl;
-        break;
-    default:
-        val = 0;
-        break;
-    }
-#ifdef DEBUG
-    printf("PM readw port=0x%04x val=0x%04x\n", addr, val);
-#endif
-    return val;
-}
-
-static void pm_ioport_writel(void *opaque, uint32_t addr, uint32_t val)
-{
-    //    PIIX4PMState *s = opaque;
-    addr &= 0x3f;
-#ifdef DEBUG
-    printf("PM writel port=0x%04x val=0x%08x\n", addr, val);
-#endif
-}
-
-static uint32_t pm_ioport_readl(void *opaque, uint32_t addr)
-{
-    PIIX4PMState *s = opaque;
-    uint32_t val;
-
-    addr &= 0x3f;
-    switch(addr) {
-    case 0x08:
-        val = get_pmtmr(s);
-        break;
-    default:
-        val = 0;
-        break;
-    }
-#ifdef DEBUG
-    printf("PM readl port=0x%04x val=0x%08x\n", addr, val);
-#endif
-    return val;
-}
-
-static void pm_smi_writeb(void *opaque, uint32_t addr, uint32_t val)
-{
-    PIIX4PMState *s = opaque;
-    addr &= 1;
-#ifdef DEBUG
-    printf("pm_smi_writeb addr=0x%x val=0x%02x\n", addr, val);
-#endif
-    if (addr == 0) {
-        s->apmc = val;
-        if (s->dev.config[0x5b] & (1 << 1)) {
-            cpu_interrupt(first_cpu, CPU_INTERRUPT_SMI);
-        }
+    addr -= gpe->blk;
+    cur = acpi_gpe_ioport_get_ptr(gpe, addr);
+    if (addr < gpe->len / 2) {
+        /* GPE_STS */
+        *cur = (*cur) & ~val;
+    } else if (addr < gpe->len) {
+        /* GPE_EN */
+        *cur = val;
     } else {
-        s->apms = val;
+        abort();
     }
 }
 
-static uint32_t pm_smi_readb(void *opaque, uint32_t addr)
+uint32_t acpi_gpe_ioport_readb(ACPIGPE *gpe, uint32_t addr)
 {
-    PIIX4PMState *s = opaque;
-    uint32_t val;
-    
-    addr &= 1;
-    if (addr == 0) {
-        val = s->apmc;
-    } else {
-        val = s->apms;
-    }
-#ifdef DEBUG
-    printf("pm_smi_readb addr=0x%x val=0x%02x\n", addr, val);
-#endif
-    return val;
-}
-
-static void acpi_dbg_writel(void *opaque, uint32_t addr, uint32_t val)
-{
-#if defined(DEBUG)
-    printf("ACPI: DBG: 0x%08x\n", val);
-#endif
-}
-
-static void smb_transaction(PIIX4PMState *s)
-{
-    uint8_t prot = (s->smb_ctl >> 2) & 0x07;
-    uint8_t read = s->smb_addr & 0x01;
-    uint8_t cmd = s->smb_cmd;
-    uint8_t addr = s->smb_addr >> 1;
-    i2c_bus *bus = s->smbus;
-
-#ifdef DEBUG
-    printf("SMBus trans addr=0x%02x prot=0x%02x\n", addr, prot);
-#endif
-    switch(prot) {
-    case 0x0:
-        smbus_quick_command(bus, addr, read);
-        break;
-    case 0x1:
-        if (read) {
-            s->smb_data0 = smbus_receive_byte(bus, addr);
-        } else {
-            smbus_send_byte(bus, addr, cmd);
-        }
-        break;
-    case 0x2:
-        if (read) {
-            s->smb_data0 = smbus_read_byte(bus, addr, cmd);
-        } else {
-            smbus_write_byte(bus, addr, cmd, s->smb_data0);
-        }
-        break;
-    case 0x3:
-        if (read) {
-            uint16_t val;
-            val = smbus_read_word(bus, addr, cmd);
-            s->smb_data0 = val;
-            s->smb_data1 = val >> 8;
-        } else {
-            smbus_write_word(bus, addr, cmd, (s->smb_data1 << 8) | s->smb_data0);
-        }
-        break;
-    case 0x5:
-        if (read) {
-            s->smb_data0 = smbus_read_block(bus, addr, cmd, s->smb_data);
-        } else {
-            smbus_write_block(bus, addr, cmd, s->smb_data, s->smb_data0);
-        }
-        break;
-    default:
-        goto error;
-    }
-    return;
-
-  error:
-    s->smb_stat |= 0x04;
-}
-
-static void smb_ioport_writeb(void *opaque, uint32_t addr, uint32_t val)
-{
-    PIIX4PMState *s = opaque;
-    addr &= 0x3f;
-#ifdef DEBUG
-    printf("SMB writeb port=0x%04x val=0x%02x\n", addr, val);
-#endif
-    switch(addr) {
-    case SMBHSTSTS:
-        s->smb_stat = 0;
-        s->smb_index = 0;
-        break;
-    case SMBHSTCNT:
-        s->smb_ctl = val;
-        if (val & 0x40)
-            smb_transaction(s);
-        break;
-    case SMBHSTCMD:
-        s->smb_cmd = val;
-        break;
-    case SMBHSTADD:
-        s->smb_addr = val;
-        break;
-    case SMBHSTDAT0:
-        s->smb_data0 = val;
-        break;
-    case SMBHSTDAT1:
-        s->smb_data1 = val;
-        break;
-    case SMBBLKDAT:
-        s->smb_data[s->smb_index++] = val;
-        if (s->smb_index > 31)
-            s->smb_index = 0;
-        break;
-    default:
-        break;
-    }
-}
-
-static uint32_t smb_ioport_readb(void *opaque, uint32_t addr)
-{
-    PIIX4PMState *s = opaque;
+    uint8_t *cur;
     uint32_t val;
 
-    addr &= 0x3f;
-    switch(addr) {
-    case SMBHSTSTS:
-        val = s->smb_stat;
-        break;
-    case SMBHSTCNT:
-        s->smb_index = 0;
-        val = s->smb_ctl & 0x1f;
-        break;
-    case SMBHSTCMD:
-        val = s->smb_cmd;
-        break;
-    case SMBHSTADD:
-        val = s->smb_addr;
-        break;
-    case SMBHSTDAT0:
-        val = s->smb_data0;
-        break;
-    case SMBHSTDAT1:
-        val = s->smb_data1;
-        break;
-    case SMBBLKDAT:
-        val = s->smb_data[s->smb_index++];
-        if (s->smb_index > 31)
-            s->smb_index = 0;
-        break;
-    default:
-        val = 0;
-        break;
+    addr -= gpe->blk;
+    cur = acpi_gpe_ioport_get_ptr(gpe, addr);
+    val = 0;
+    if (cur != NULL) {
+        val = *cur;
     }
-#ifdef DEBUG
-    printf("SMB readb port=0x%04x val=0x%02x\n", addr, val);
-#endif
+
     return val;
-}
-
-static void pm_io_space_update(PIIX4PMState *s)
-{
-    uint32_t pm_io_base;
-
-    if (s->dev.config[0x80] & 1) {
-        pm_io_base = le32_to_cpu(*(uint32_t *)(s->dev.config + 0x40));
-        pm_io_base &= 0xfffe;
-
-        /* XXX: need to improve memory and ioport allocation */
-#if defined(DEBUG)
-        printf("PM: mapping to 0x%x\n", pm_io_base);
-#endif
-        register_ioport_write(pm_io_base, 64, 2, pm_ioport_writew, s);
-        register_ioport_read(pm_io_base, 64, 2, pm_ioport_readw, s);
-        register_ioport_write(pm_io_base, 64, 4, pm_ioport_writel, s);
-        register_ioport_read(pm_io_base, 64, 4, pm_ioport_readl, s);
-    }
-}
-
-static void pm_write_config(PCIDevice *d, 
-                            uint32_t address, uint32_t val, int len)
-{
-    pci_default_write_config(d, address, val, len);
-    if (address == 0x80)
-        pm_io_space_update((PIIX4PMState *)d);
-}
-
-static void pm_save(QEMUFile* f,void *opaque)
-{
-    PIIX4PMState *s = opaque;
-
-    pci_device_save(&s->dev, f);
-
-    qemu_put_be16s(f, &s->pmsts);
-    qemu_put_be16s(f, &s->pmen);
-    qemu_put_be16s(f, &s->pmcntrl);
-    qemu_put_8s(f, &s->apmc);
-    qemu_put_8s(f, &s->apms);
-    qemu_put_timer(f, s->tmr_timer);
-    qemu_put_be64s(f, &s->tmr_overflow_time);
-}
-
-static int pm_load(QEMUFile* f,void* opaque,int version_id)
-{
-    PIIX4PMState *s = opaque;
-    int ret;
-
-    if (version_id > 1)
-        return -EINVAL;
-
-    ret = pci_device_load(&s->dev, f);
-    if (ret < 0)
-        return ret;
-
-    qemu_get_be16s(f, &s->pmsts);
-    qemu_get_be16s(f, &s->pmen);
-    qemu_get_be16s(f, &s->pmcntrl);
-    qemu_get_8s(f, &s->apmc);
-    qemu_get_8s(f, &s->apms);
-    qemu_get_timer(f, s->tmr_timer);
-    qemu_get_be64s(f, &s->tmr_overflow_time);
-
-    pm_io_space_update(s);
-
-    return 0;
-}
-
-i2c_bus *piix4_pm_init(PCIBus *bus, int devfn, uint32_t smb_io_base)
-{
-    PIIX4PMState *s;
-    uint8_t *pci_conf;
-
-    s = (PIIX4PMState *)pci_register_device(bus,
-                                         "PM", sizeof(PIIX4PMState),
-                                         devfn, NULL, pm_write_config);
-    pci_conf = s->dev.config;
-    pci_conf[0x00] = 0x86;
-    pci_conf[0x01] = 0x80;
-    pci_conf[0x02] = 0x13;
-    pci_conf[0x03] = 0x71;
-    pci_conf[0x08] = 0x00; // revision number
-    pci_conf[0x09] = 0x00;
-    pci_conf[0x0a] = 0x80; // other bridge device
-    pci_conf[0x0b] = 0x06; // bridge device
-    pci_conf[0x0e] = 0x00; // header_type
-    pci_conf[0x3d] = 0x01; // interrupt pin 1
-    
-    pci_conf[0x40] = 0x01; /* PM io base read only bit */
-    
-    register_ioport_write(0xb2, 2, 1, pm_smi_writeb, s);
-    register_ioport_read(0xb2, 2, 1, pm_smi_readb, s);
-
-    register_ioport_write(ACPI_DBG_IO_ADDR, 4, 4, acpi_dbg_writel, s);
-
-    /* XXX: which specification is used ? The i82731AB has different
-       mappings */
-    pci_conf[0x5f] = (parallel_hds[0] != NULL ? 0x80 : 0) | 0x10;
-    pci_conf[0x63] = 0x60;
-    pci_conf[0x67] = (serial_hds[0] != NULL ? 0x08 : 0) |
-	(serial_hds[1] != NULL ? 0x90 : 0);
-
-    pci_conf[0x90] = smb_io_base | 1;
-    pci_conf[0x91] = smb_io_base >> 8;
-    pci_conf[0xd2] = 0x09;
-    register_ioport_write(smb_io_base, 64, 1, smb_ioport_writeb, s);
-    register_ioport_read(smb_io_base, 64, 1, smb_ioport_readb, s);
-
-    s->tmr_timer = qemu_new_timer(vm_clock, pm_tmr_timer, s);
-
-    register_savevm("piix4_pm", 0, 1, pm_save, pm_load, s);
-
-    s->smbus = i2c_init_bus();
-    return s->smbus;
 }

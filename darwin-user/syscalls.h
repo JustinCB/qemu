@@ -17,7 +17,7 @@
  ENTRY("mknod",                    SYS_mknod,                          mknod,                             3, CALL_DIRECT, PTR, INT, INT)   /* 14  */
  ENTRY("chmod",                    SYS_chmod,                          chmod,                             2, CALL_DIRECT, PTR, INT)   /* 15  */
  ENTRY("chown",                    SYS_chown,                          chown,                             3, CALL_DIRECT, PTR, INT, INT)   /* 16  */
- ENTRY("obreak",                   SYS_obreak,                         no_syscall,                        1, CALL_INDIRECT, VOID)   /* 17  old break */
+ ENTRY("obreak",                   /*SYS_obreak*/17,                         no_syscall,                        1, CALL_INDIRECT, VOID)   /* 17  old break */
  ENTRY("ogetfsstat",               18,                                 unimpl_unix_syscall,               3, CALL_INDIRECT, PTR, INT, INT)   /* 18  */
  ENTRY("",                         19,                                 no_syscall,                        0, CALL_INDIRECT, VOID) /* 19  old lseek */
  ENTRY("getpid",                   SYS_getpid,                         getpid,                            0, CALL_NOERRNO, VOID)   /* 20  */
@@ -44,8 +44,8 @@
  ENTRY("dup",                      SYS_dup,                            dup,                               1, CALL_DIRECT, INT)   /* 41  */
  ENTRY("pipe",                     SYS_pipe,                           pipe,               0, CALL_INDIRECT, PTR)   /* 42  */
  ENTRY("getegid",                  SYS_getegid,                        getegid,                           0, CALL_NOERRNO, VOID)  /* 43  */
- ENTRY("profil",                   SYS_profil,                         profil,                            4, CALL_DIRECT, PTR, SIZE, INT, INT)   /* 44  */
- ENTRY("ktrace",                   SYS_ktrace,                         no_syscall,                        4, CALL_INDIRECT, VOID) /* 45  */
+ ENTRY("profil",                   /*SYS_profil*/44,                         profil,                            4, CALL_DIRECT, PTR, SIZE, INT, INT)   /* 44  */
+ ENTRY("ktrace",                   /*SYS_ktrace*/45,                         no_syscall,                        4, CALL_INDIRECT, VOID) /* 45  */
  ENTRY("sigaction",                SYS_sigaction,                      do_sigaction,                      3, CALL_DIRECT, INT, PTR, PTR)   /* 46  */
  ENTRY("getgid",                   SYS_getgid,                         getgid,                            0, CALL_NOERRNO, VOID)  /* 47  */
  ENTRY("sigprocmask",              SYS_sigprocmask,                    do_sigprocmask,                    3, CALL_DIRECT, INT, PTR, PTR)   /* 48  */
@@ -69,10 +69,10 @@
  ENTRY("vfork",                    SYS_vfork,                          vfork,                             0, CALL_DIRECT, VOID)   /* 66  */
  ENTRY("",                         67,                                 no_syscall,                        0, CALL_INDIRECT, VOID) /* 67  old vread */
  ENTRY("",                         68,                                 no_syscall,                        0, CALL_INDIRECT, VOID) /* 68  old vwrite */
- ENTRY("sbrk",                     SYS_sbrk,                           sbrk,                              1, CALL_DIRECT, INT)   /* 69  */
- ENTRY("sstk",                     SYS_sstk,                           no_syscall,                        1, CALL_INDIRECT, VOID) /* 70  */
+ ENTRY("sbrk",                     /*SYS_sbrk*/69,                           sbrk,                              1, CALL_DIRECT, INT)   /* 69  */
+ ENTRY("sstk",                     /*SYS_sstk*/70,                           no_syscall,                        1, CALL_INDIRECT, VOID) /* 70  */
  ENTRY("",                         71,                                 no_syscall,                        0, CALL_INDIRECT, VOID) /* 71  old mmap */
- ENTRY("ovadvise",                 SYS_ovadvise,                       no_syscall,                        0, CALL_INDIRECT, VOID) /* 72  old vadvise */
+ ENTRY("ovadvise",                 /*SYS_ovadvise*/72,                       no_syscall,                        0, CALL_INDIRECT, VOID) /* 72  old vadvise */
  ENTRY("munmap",                   SYS_munmap,                         target_munmap,                     2, CALL_DIRECT, UINT /* PTR */, SIZE)   /* 73  */
  ENTRY("mprotect",                 SYS_mprotect,                       mprotect,                          3, CALL_DIRECT, PTR, SIZE, INT)   /* 74  */
  ENTRY("madvise",                  SYS_madvise,                        madvise,                           3, CALL_DIRECT, PTR, SIZE, INT)   /* 75  */
@@ -175,13 +175,13 @@
  ENTRY("mount",                    SYS_mount,                          mount,                             4, CALL_DIRECT, PTR, PTR, INT, PTR)   /* 167  */
  ENTRY("",                         168,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 168  old ustat */
  ENTRY("",                         169,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 169  */
- ENTRY("table",                    SYS_table,                          no_syscall,                        0, CALL_INDIRECT, VOID) /* 170  old table */
+ ENTRY("table",                    /*SYS_table*/170,                          no_syscall,                        0, CALL_INDIRECT, VOID) /* 170  old table */
  ENTRY("",                         171,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 171  old wait3 */
  ENTRY("",                         172,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 172  old rpause */
  ENTRY("waitid",                   SYS_waitid,                         unimpl_unix_syscall,               4, CALL_INDIRECT, VOID) /* 173  */
  ENTRY("",                         174,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 174  old getdents */
  ENTRY("",                         175,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 175  old gc_control */
- ENTRY("add_profil",               SYS_add_profil,                     add_profil,                        4, CALL_DIRECT, PTR, SIZE, UINT, UINT)   /* 176  */
+ ENTRY("add_profil",               /*SYS_add_profil*/176,                     add_profil,                        4, CALL_DIRECT, PTR, SIZE, UINT, UINT)   /* 176  */
  ENTRY("",                         177,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 177  */
  ENTRY("",                         178,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 178  */
  ENTRY("",                         179,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 179  */
@@ -190,7 +190,7 @@
  ENTRY("setegid",                  SYS_setegid,                        setegid,                           1, CALL_DIRECT, INT)   /* 182  */
  ENTRY("seteuid",                  SYS_seteuid,                        seteuid,                           1, CALL_DIRECT, INT)   /* 183  */
  ENTRY("sigreturn",                SYS_sigreturn,                      do_sigreturn,                      2, CALL_INDIRECT, PTR, INT)   /* 184  */
- ENTRY("chud",                     SYS_chud,                           unimpl_unix_syscall,               6, CALL_INDIRECT, VOID)   /* 185  */
+ ENTRY("chud",                     /*SYS_chud*/185,                           unimpl_unix_syscall,               6, CALL_INDIRECT, VOID)   /* 185  */
  ENTRY("",                         186,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 186  */
  ENTRY("",                         187,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 187  */
  ENTRY("stat",                     SYS_stat,                           do_stat,                           2, CALL_DIRECT, PTR, PTR)   /* 188  */
@@ -198,7 +198,7 @@
  ENTRY("lstat",                    SYS_lstat,                          do_lstat,                          2, CALL_DIRECT, PTR, PTR)   /* 190  */
  ENTRY("pathconf",                 SYS_pathconf,                       pathconf,                          2, CALL_DIRECT, PTR, INT)   /* 191  */
  ENTRY("fpathconf",                SYS_fpathconf,                      fpathconf,                         2, CALL_DIRECT, INT, INT)   /* 192  */
- ENTRY("getfsstat",                SYS_getfsstat,                      do_getfsstat,                      3, CALL_DIRECT, PTR, INT, INT)   /* 193  */
+ ENTRY("getfsstat",                /*SYS_getfsstat*/193,                      do_getfsstat,                      3, CALL_DIRECT, PTR, INT, INT)   /* 193  */
  ENTRY("",                         193,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 193  */
  ENTRY("getrlimit",                SYS_getrlimit,                      getrlimit,                         2, CALL_DIRECT, UINT, PTR)   /* 194  */
  ENTRY("setrlimit",                SYS_setrlimit,                      setrlimit,                         2, CALL_DIRECT, UINT, PTR)   /* 195  */
@@ -208,29 +208,29 @@
  ENTRY("lseek",                    SYS_lseek,                          do_lseek,                          3, CALL_INDIRECT, INT, OFFSET, INT)   /* 199  */
  ENTRY("truncate",                 SYS_truncate,                       truncate,                          2, CALL_DIRECT, PTR, OFFSET)   /* 200  */
  ENTRY("ftruncate",                SYS_ftruncate,                      ftruncate,                         2, CALL_DIRECT, INT, OFFSET)   /* 201  */
- ENTRY("__sysctl",                 SYS___sysctl,                       do___sysctl,                       6, CALL_DIRECT, PTR, INT, PTR, PTR, PTR, SIZE)   /* 202  */
+ ENTRY("__sysctl",                 /*SYS___sysctl*/202,                       do___sysctl,                       6, CALL_DIRECT, PTR, INT, PTR, PTR, PTR, SIZE)   /* 202  */
  ENTRY("mlock",                    SYS_mlock,                          mlock,                             2, CALL_DIRECT, PTR, SIZE)   /* 203  */
  ENTRY("munlock",                  SYS_munlock,                        munlock,                           2, CALL_DIRECT, PTR, SIZE)   /* 204  */
  ENTRY("undelete",                 SYS_undelete,                       undelete,                          1, CALL_DIRECT, PTR)   /* 205  */
- ENTRY("ATsocket",                 SYS_ATsocket,                       no_syscall,                        1, CALL_INDIRECT, VOID) /* 206  */
- ENTRY("ATgetmsg",                 SYS_ATgetmsg,                       no_syscall,                        4, CALL_INDIRECT, VOID) /* 207  */
- ENTRY("ATputmsg",                 SYS_ATputmsg,                       no_syscall,                        4, CALL_INDIRECT, VOID) /* 208  */
- ENTRY("ATPsndreq",                SYS_ATPsndreq,                      no_syscall,                        4, CALL_INDIRECT, VOID) /* 209  */
- ENTRY("ATPsndrsp",                SYS_ATPsndrsp,                      no_syscall,                        4, CALL_INDIRECT, VOID) /* 210  */
- ENTRY("ATPgetreq",                SYS_ATPgetreq,                      no_syscall,                        3, CALL_INDIRECT, VOID) /* 211  */
- ENTRY("ATPgetrsp",                SYS_ATPgetrsp,                      no_syscall,                        2, CALL_INDIRECT, VOID) /* 212  */
+ ENTRY("ATsocket",                 /*SYS_ATsocket*/206,                       no_syscall,                        1, CALL_INDIRECT, VOID) /* 206  */
+ ENTRY("ATgetmsg",                 /*SYS_ATgetmsg*/207,                       no_syscall,                        4, CALL_INDIRECT, VOID) /* 207  */
+ ENTRY("ATputmsg",                 /*SYS_ATputmsg*/208,                       no_syscall,                        4, CALL_INDIRECT, VOID) /* 208  */
+ ENTRY("ATPsndreq",                /*SYS_ATPsndreq*/209,                      no_syscall,                        4, CALL_INDIRECT, VOID) /* 209  */
+ ENTRY("ATPsndrsp",                /*SYS_ATPsndrsp*/210,                      no_syscall,                        4, CALL_INDIRECT, VOID) /* 210  */
+ ENTRY("ATPgetreq",                /*SYS_ATPgetreq*/211,                      no_syscall,                        3, CALL_INDIRECT, VOID) /* 211  */
+ ENTRY("ATPgetrsp",                /*SYS_ATPgetrsp*/212,                      no_syscall,                        2, CALL_INDIRECT, VOID) /* 212  */
  ENTRY("",                         213,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 213  Reserved for AppleTalk */
- ENTRY("kqueue_from_portset_np",   SYS_kqueue_from_portset_np,         no_syscall,                        1, CALL_INDIRECT, VOID) /* 214  */
- ENTRY("kqueue_portset_np",        SYS_kqueue_portset_np,              no_syscall,                        1, CALL_INDIRECT, VOID) /* 215  */
- ENTRY("mkcomplex",                SYS_mkcomplex,                      no_syscall,                        3, CALL_INDIRECT, VOID)   /* 216  soon to be obsolete */
- ENTRY("statv",                    SYS_statv,                          no_syscall,                        2, CALL_INDIRECT, VOID)   /* 217  soon to be obsolete */
- ENTRY("lstatv",                   SYS_lstatv,                         no_syscall,                        2, CALL_INDIRECT, VOID)   /* 218  soon to be obsolete */
- ENTRY("fstatv",                   SYS_fstatv,                         no_syscall,                        2, CALL_INDIRECT, VOID)   /* 219  soon to be obsolete */
+ ENTRY("kqueue_from_portset_np",   /*SYS_kqueue_from_portset_np*/214,         no_syscall,                        1, CALL_INDIRECT, VOID) /* 214  */
+ ENTRY("kqueue_portset_np",        /*SYS_kqueue_portset_np*/215,              no_syscall,                        1, CALL_INDIRECT, VOID) /* 215  */
+ ENTRY("mkcomplex",                /*SYS_mkcomplex*//*SYS_open_dprotected_np*/216,                      no_syscall,                        3, CALL_INDIRECT, VOID)   /* 216  soon to be obsolete */
+ ENTRY("statv",                    /*SYS_statv*/217,                          no_syscall,                        2, CALL_INDIRECT, VOID)   /* 217  soon to be obsolete */
+ ENTRY("lstatv",                   /*SYS_lstatv*/218,                         no_syscall,                        2, CALL_INDIRECT, VOID)   /* 218  soon to be obsolete */
+ ENTRY("fstatv",                   /*SYS_fstatv*/219,                         no_syscall,                        2, CALL_INDIRECT, VOID)   /* 219  soon to be obsolete */
  ENTRY("getattrlist",              SYS_getattrlist,                    do_getattrlist,                    5, CALL_DIRECT, PTR, PTR, PTR, SIZE, UINT)   /* 220  */
  ENTRY("setattrlist",              SYS_setattrlist,                    unimpl_unix_syscall,               5, CALL_INDIRECT, VOID) /* 221  */
  ENTRY("getdirentriesattr",        SYS_getdirentriesattr,              do_getdirentriesattr,              8, CALL_DIRECT, INT, PTR, PTR, SIZE, PTR, PTR, PTR, UINT)   /* 222  */
  ENTRY("exchangedata",             SYS_exchangedata,                   exchangedata,                      3, CALL_DIRECT, PTR, PTR, UINT)   /* 223  */
- ENTRY("checkuseraccess",          SYS_checkuseraccess,                checkuseraccess,                   6, CALL_DIRECT, PTR, INT, PTR, INT, INT, UINT)   /* 224  */
+ ENTRY("checkuseraccess",          /*SYS_checkuseraccess*/224,                checkuseraccess,                   6, CALL_DIRECT, PTR, INT, PTR, INT, INT, UINT)   /* 224  */
  ENTRY("",                         224,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 224  HFS checkuseraccess check access to a file */
  ENTRY("searchfs",                 SYS_searchfs,                       searchfs,                          6, CALL_DIRECT, PTR, PTR, PTR, UINT, UINT, PTR)   /* 225  */
  ENTRY("delete",                   SYS_delete,                         no_syscall,                        1, CALL_INDIRECT, VOID)   /* 226  private delete ( Carbon semantics ) */
@@ -251,7 +251,7 @@
  ENTRY("flistxattr",               SYS_flistxattr,                     no_syscall,                        4, CALL_INDIRECT, VOID)   /* 241  */
  ENTRY("fsctl",                    SYS_fsctl,                          fsctl,                             4, CALL_DIRECT, PTR, UINT, PTR, UINT)   /* 242  */
  ENTRY("initgroups",               SYS_initgroups,                     unimpl_unix_syscall,               3, CALL_INDIRECT, UINT, PTR, INT)   /* 243  */
- ENTRY("",                         244,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 244  */
+ ENTRY("",                         244/*SYS_posix_spawn*/,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 244  */
  ENTRY("",                         245,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 245  */
  ENTRY("",                         246,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 246  */
 #ifdef SYS_nfsclnt
@@ -260,7 +260,7 @@
  ENTRY("nfsclnt",                  247,                                no_syscall,                        2, CALL_INDIRECT, VOID)   /* 247  */
 #endif
  ENTRY("",                         247,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 247  */
- ENTRY("",                         248,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 248  */
+ ENTRY("",                         248/*SYS_fhopen*/,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 248  */
  ENTRY("",                         249,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 249  */
  ENTRY("minherit",                 SYS_minherit,                       minherit,                          3, CALL_DIRECT, PTR, INT, INT)   /* 250  */
  ENTRY("semsys",                   SYS_semsys,                         unimpl_unix_syscall,               5, CALL_INDIRECT, VOID)   /* 251  */
@@ -286,9 +286,9 @@
  ENTRY("sem_wait",                 SYS_sem_wait,                       unimpl_unix_syscall,               1, CALL_INDIRECT, VOID)   /* 271  */
  ENTRY("sem_trywait",              SYS_sem_trywait,                    unimpl_unix_syscall,               1, CALL_INDIRECT, VOID)   /* 272  */
  ENTRY("sem_post",                 SYS_sem_post,                       unimpl_unix_syscall,               1, CALL_INDIRECT, VOID)   /* 273  */
- ENTRY("sem_getvalue",             SYS_sem_getvalue,                   unimpl_unix_syscall,               2, CALL_INDIRECT, VOID)   /* 274  */
- ENTRY("sem_init",                 SYS_sem_init,                       unimpl_unix_syscall,               3, CALL_INDIRECT, VOID)   /* 275  */
- ENTRY("sem_destroy",              SYS_sem_destroy,                    unimpl_unix_syscall,               1, CALL_INDIRECT, VOID)   /* 276  */
+ ENTRY("sem_getvalue",             /*SYS_sem_getvalue*/274,                   unimpl_unix_syscall,               2, CALL_INDIRECT, VOID)   /* 274  */
+ ENTRY("sem_init",                 /*SYS_sem_init*/275,                       unimpl_unix_syscall,               3, CALL_INDIRECT, VOID)   /* 275  */
+ ENTRY("sem_destroy",              /*SYS_sem_destroy*/276,                    unimpl_unix_syscall,               1, CALL_INDIRECT, VOID)   /* 276  */
  ENTRY("open_extended",            SYS_open_extended,                  unimpl_unix_syscall,               6, CALL_INDIRECT, VOID)   /* 277  */
  ENTRY("umask_extended",           SYS_umask_extended,                 unimpl_unix_syscall,               2, CALL_INDIRECT, VOID)   /* 278  */
  ENTRY("stat_extended",            SYS_stat_extended,                  unimpl_unix_syscall,               4, CALL_INDIRECT, VOID)   /* 279  */
@@ -308,11 +308,11 @@
  ENTRY("identitysvc",              SYS_identitysvc,                    unimpl_unix_syscall,               2, CALL_INDIRECT, VOID)   /* 293  */
  ENTRY("",                         294,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 294  */
  ENTRY("",                         295,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 295  */
- ENTRY("load_shared_file",         SYS_load_shared_file,               unimpl_unix_syscall,               7, CALL_INDIRECT, VOID)   /* 296  */
- ENTRY("reset_shared_file",        SYS_reset_shared_file,              unimpl_unix_syscall,               3, CALL_INDIRECT, VOID)   /* 297  */
- ENTRY("new_system_shared_regions",  SYS_new_system_shared_regions,    unimpl_unix_syscall,               0, CALL_INDIRECT, VOID)   /* 298  */
- ENTRY("shared_region_map_file_np",  SYS_shared_region_map_file_np,    unimpl_unix_syscall,               4, CALL_INDIRECT, VOID)   /* 299  */
- ENTRY("shared_region_make_private_np",  SYS_shared_region_make_private_np,  unimpl_unix_syscall,         2, CALL_INDIRECT, VOID)   /* 300  */
+ ENTRY("load_shared_file",         /*SYS_load_shared_file*/296,               unimpl_unix_syscall,               7, CALL_INDIRECT, VOID)   /* 296  */
+ ENTRY("reset_shared_file",        /*SYS_reset_shared_file*/297,              unimpl_unix_syscall,               3, CALL_INDIRECT, VOID)   /* 297  */
+ ENTRY("new_system_shared_regions",  /*SYS_new_system_shared_regions*/298,    unimpl_unix_syscall,               0, CALL_INDIRECT, VOID)   /* 298  */
+ ENTRY("shared_region_map_file_np",  /*SYS_shared_region_map_file_np*/299,    unimpl_unix_syscall,               4, CALL_INDIRECT, VOID)   /* 299  */
+ ENTRY("shared_region_make_private_np",  /*SYS_shared_region_make_private_np*/300,  unimpl_unix_syscall,         2, CALL_INDIRECT, VOID)   /* 300  */
  ENTRY("",                         301,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 301  */
  ENTRY("",                         302,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 302  */
  ENTRY("",                         303,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 303  */
@@ -341,13 +341,13 @@
  ENTRY("",                         326,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 326  */
  ENTRY("issetugid",                SYS_issetugid,                      issetugid,                         0, CALL_DIRECT, VOID)   /* 327  */
  ENTRY("__pthread_kill",           SYS___pthread_kill,                 unimpl_unix_syscall,               2, CALL_INDIRECT, VOID)   /* 328  */
- ENTRY("pthread_sigmask",          SYS_pthread_sigmask,                pthread_sigmask,                   3, CALL_DIRECT, INT, PTR, PTR)   /* 329  */
- ENTRY("sigwait",                  SYS_sigwait,                        sigwait,                           2, CALL_DIRECT, PTR, PTR)   /* 330  */
+ ENTRY("pthread_sigmask",          /*SYS_pthread_sigmask*/329,                pthread_sigmask,                   3, CALL_DIRECT, INT, PTR, PTR)   /* 329  */
+ ENTRY("sigwait",                  /*SYS_sigwait*/330,                        sigwait,                           2, CALL_DIRECT, PTR, PTR)   /* 330  */
  ENTRY("__disable_threadsignal",   SYS___disable_threadsignal,         unimpl_unix_syscall,               1, CALL_INDIRECT, VOID)   /* 331  */
  ENTRY("__pthread_markcancel",     SYS___pthread_markcancel,           unimpl_unix_syscall,               1, CALL_INDIRECT, VOID)   /* 332  */
  ENTRY("__pthread_canceled",       SYS___pthread_canceled,             unimpl_unix_syscall,               1, CALL_INDIRECT, VOID)   /* 333  */
  ENTRY("__semwait_signal",         SYS___semwait_signal,               unimpl_unix_syscall,               6, CALL_INDIRECT, VOID)   /* 334  */
- ENTRY("utrace",                   SYS_utrace,                         unimpl_unix_syscall,               2, CALL_INDIRECT, VOID)   /* 335  */
+ ENTRY("utrace",                   /*SYS_utrace*/335,                         unimpl_unix_syscall,               2, CALL_INDIRECT, VOID)   /* 335  */
  ENTRY("proc_info",                SYS_proc_info,                      unimpl_unix_syscall,               6, CALL_INDIRECT, VOID)   /* 336  */
  ENTRY("",                         337,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 337  */
  ENTRY("",                         338,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 338  */
@@ -367,8 +367,8 @@
  ENTRY("",                         352,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 352  */
  ENTRY("getauid",                  SYS_getauid,                        getauid,                           1, CALL_DIRECT, PTR)   /* 353  */
  ENTRY("setauid",                  SYS_setauid,                        setauid,                           1, CALL_DIRECT, PTR)   /* 354  */
- ENTRY("getaudit",                 SYS_getaudit,                       getaudit,                          1, CALL_DIRECT, PTR)   /* 355  */
- ENTRY("setaudit",                 SYS_setaudit,                       setaudit,                          1, CALL_DIRECT, PTR)   /* 356  */
+ ENTRY("getaudit",                 /*SYS_getaudit*/355,                       getaudit,                          1, CALL_DIRECT, PTR)   /* 355  */
+ ENTRY("setaudit",                 /*SYS_setaudit*/356,                       setaudit,                          1, CALL_DIRECT, PTR)   /* 356  */
  ENTRY("getaudit_addr",            SYS_getaudit_addr,                  getaudit_addr,                     2, CALL_DIRECT, PTR, INT)   /* 357  */
  ENTRY("setaudit_addr",            SYS_setaudit_addr,                  setaudit_addr,                     2, CALL_DIRECT, PTR, INT)   /* 358  */
  ENTRY("auditctl",                 SYS_auditctl,                       auditctl,                          1, CALL_DIRECT, PTR)   /* 359  */
@@ -377,7 +377,7 @@
  ENTRY("kqueue",                   SYS_kqueue,                         kqueue,                            0, CALL_DIRECT, VOID)   /* 362  */
  ENTRY("kevent",                   SYS_kevent,                         kevent,                            6, CALL_DIRECT, INT, PTR, INT, PTR, INT, PTR)   /* 363  */
  ENTRY("lchown",                   SYS_lchown,                         lchown,                            3, CALL_DIRECT, PTR, INT , INT)   /* 364  */
- ENTRY("stack_snapshot",           SYS_stack_snapshot,                 unimpl_unix_syscall,               4, CALL_INDIRECT, VOID)   /* 365  */
+ ENTRY("stack_snapshot",           /*SYS_stack_snapshot*/365,                 unimpl_unix_syscall,               4, CALL_INDIRECT, VOID)   /* 365  */
  ENTRY("",                         366,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 366  */
  ENTRY("",                         367,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 367  */
  ENTRY("",                         368,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 368  */

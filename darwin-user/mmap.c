@@ -14,8 +14,7 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <stdlib.h>
 #include <stdio.h>
@@ -130,7 +129,7 @@ int mmap_frag(unsigned long host_start,
         if ((flags &  MAP_SHARED) &&
 #endif
             (prot & PROT_WRITE))
-            return -EINVAL;
+            return -1;
 
         /* adjust protection to be able to read */
         if (!(prot1 & PROT_WRITE))
@@ -408,4 +407,3 @@ int target_msync(unsigned long start, unsigned long len, int flags)
     start &= qemu_host_page_mask;
     return msync((void *)start, end - start, flags);
 }
-

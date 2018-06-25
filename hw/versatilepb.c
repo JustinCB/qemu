@@ -1,26 +1,46 @@
-/* 
+/*
  * ARM Versatile Platform/Application Baseboard System emulation.
  *
  * Copyright (c) 2005-2007 CodeSourcery.
  * Written by Paul Brook
  *
- * This code is licenced under the GPL.
+ * This code is licensed under the GPL.
  */
 
-#include "vl.h"
-#include "arm_pic.h"
+#include "sysbus.h"
+#include "arm-misc.h"
+#include "primecell.h"
+#include "devices.h"
+#include "net.h"
+#include "sysemu.h"
+#include "pci.h"
+#include "usb-ohci.h"
+#include "boards.h"
+#include "blockdev.h"
 
 /* Primary interrupt controller.  */
 
 typedef struct vpb_sic_state
 {
-  uint32_t base;
+  SysBusDevice busdev;
   uint32_t level;
   uint32_t mask;
   uint32_t pic_enable;
-  qemu_irq *parent;
+  qemu_irq parent[32];
   int irq;
 } vpb_sic_state;
+
+static const VMStateDescription vmstate_vpb_sic = {
+    .name = "versatilepb_sic",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (VMStateField[]) {
+        VMSTATE_UINT32(level, vpb_sic_state),
+        VMSTATE_UINT32(mask, vpb_sic_state),
+        VMSTATE_UINT32(pic_enable, vpb_sic_state),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static void vpb_sic_update(vpb_sic_state *s)
 {
@@ -59,7 +79,6 @@ static uint32_t vpb_sic_read(void *opaque, target_phys_addr_t offset)
 {
     vpb_sic_state *s = (vpb_sic_state *)opaque;
 
-    offset -= s->base;
     switch (offset >> 2) {
     case 0: /* STATUS */
         return s->level & s->mask;
@@ -81,7 +100,6 @@ static void vpb_sic_write(void *opaque, target_phys_addr_t offset,
                           uint32_t value)
 {
     vpb_sic_state *s = (vpb_sic_state *)opaque;
-    offset -= s->base;
 
     switch (offset >> 2) {
     case 2: /* ENSET */
@@ -113,36 +131,34 @@ static void vpb_sic_write(void *opaque, target_phys_addr_t offset,
     vpb_sic_update(s);
 }
 
-static CPUReadMemoryFunc *vpb_sic_readfn[] = {
+static CPUReadMemoryFunc * const vpb_sic_readfn[] = {
    vpb_sic_read,
    vpb_sic_read,
    vpb_sic_read
 };
 
-static CPUWriteMemoryFunc *vpb_sic_writefn[] = {
+static CPUWriteMemoryFunc * const vpb_sic_writefn[] = {
    vpb_sic_write,
    vpb_sic_write,
    vpb_sic_write
 };
 
-static qemu_irq *vpb_sic_init(uint32_t base, qemu_irq *parent, int irq)
+static int vpb_sic_init(SysBusDevice *dev)
 {
-    vpb_sic_state *s;
-    qemu_irq *qi;
+    vpb_sic_state *s = FROM_SYSBUS(vpb_sic_state, dev);
     int iomemtype;
+    int i;
 
-    s = (vpb_sic_state *)qemu_mallocz(sizeof(vpb_sic_state));
-    if (!s)
-        return NULL;
-    qi = qemu_allocate_irqs(vpb_sic_set_irq, s, 32);
-    s->base = base;
-    s->parent = parent;
-    s->irq = irq;
-    iomemtype = cpu_register_io_memory(0, vpb_sic_readfn,
-                                       vpb_sic_writefn, s);
-    cpu_register_physical_memory(base, 0x00001000, iomemtype);
-    /* ??? Save/restore.  */
-    return qi;
+    qdev_init_gpio_in(&dev->qdev, vpb_sic_set_irq, 32);
+    for (i = 0; i < 32; i++) {
+        sysbus_init_irq(dev, &s->parent[i]);
+    }
+    s->irq = 31;
+    iomemtype = cpu_register_io_memory(vpb_sic_readfn,
+                                       vpb_sic_writefn, s,
+                                       DEVICE_NATIVE_ENDIAN);
+    sysbus_init_mmio(dev, 0x1000, iomemtype);
+    return 0;
 }
 
 /* Board init.  */
@@ -151,77 +167,111 @@ static qemu_irq *vpb_sic_init(uint32_t base, qemu_irq *parent, int irq)
    peripherans and expansion busses.  For now we emulate a subset of the
    PB peripherals and just change the board ID.  */
 
-static void versatile_init(int ram_size, int vga_ram_size, int boot_device,
-                     DisplayState *ds, const char **fd_filename, int snapshot,
+static struct arm_boot_info versatile_binfo;
+
+static void versatile_init(ram_addr_t ram_size,
+                     const char *boot_device,
                      const char *kernel_filename, const char *kernel_cmdline,
                      const char *initrd_filename, const char *cpu_model,
                      int board_id)
 {
     CPUState *env;
-    qemu_irq *pic;
-    qemu_irq *sic;
-    void *scsi_hba;
+    ram_addr_t ram_offset;
+    qemu_irq *cpu_pic;
+    qemu_irq pic[32];
+    qemu_irq sic[32];
+    DeviceState *dev, *sysctl;
+    SysBusDevice *busdev;
     PCIBus *pci_bus;
     NICInfo *nd;
     int n;
     int done_smc = 0;
 
-    env = cpu_init();
     if (!cpu_model)
         cpu_model = "arm926";
-    cpu_arm_set_model(env, cpu_model);
-    /* ??? RAM shoud repeat to fill physical memory space.  */
+    env = cpu_init(cpu_model);
+    if (!env) {
+        fprintf(stderr, "Unable to find CPU definition\n");
+        exit(1);
+    }
+    ram_offset = qemu_ram_alloc(NULL, "versatile.ram", ram_size);
+    /* ??? RAM should repeat to fill physical memory space.  */
     /* SDRAM at address zero.  */
-    cpu_register_physical_memory(0, ram_size, IO_MEM_RAM);
+    cpu_register_physical_memory(0, ram_size, ram_offset | IO_MEM_RAM);
 
-    arm_sysctl_init(0x10000000, 0x41007004);
-    pic = arm_pic_init_cpu(env);
-    pic = pl190_init(0x10140000, pic[0], pic[1]);
-    sic = vpb_sic_init(0x10003000, pic, 31);
-    pl050_init(0x10006000, sic[3], 0);
-    pl050_init(0x10007000, sic[4], 1);
+    sysctl = qdev_create(NULL, "realview_sysctl");
+    qdev_prop_set_uint32(sysctl, "sys_id", 0x41007004);
+    qdev_init_nofail(sysctl);
+    qdev_prop_set_uint32(sysctl, "proc_id", 0x02000000);
+    sysbus_mmio_map(sysbus_from_qdev(sysctl), 0, 0x10000000);
 
-    pci_bus = pci_vpb_init(sic, 27, 0);
+    cpu_pic = arm_pic_init_cpu(env);
+    dev = sysbus_create_varargs("pl190", 0x10140000,
+                                cpu_pic[0], cpu_pic[1], NULL);
+    for (n = 0; n < 32; n++) {
+        pic[n] = qdev_get_gpio_in(dev, n);
+    }
+    dev = sysbus_create_simple("versatilepb_sic", 0x10003000, NULL);
+    for (n = 0; n < 32; n++) {
+        sysbus_connect_irq(sysbus_from_qdev(dev), n, pic[n]);
+        sic[n] = qdev_get_gpio_in(dev, n);
+    }
+
+    sysbus_create_simple("pl050_keyboard", 0x10006000, sic[3]);
+    sysbus_create_simple("pl050_mouse", 0x10007000, sic[4]);
+
+    dev = qdev_create(NULL, "versatile_pci");
+    busdev = sysbus_from_qdev(dev);
+    qdev_init_nofail(dev);
+    sysbus_mmio_map(busdev, 0, 0x41000000); /* PCI self-config */
+    sysbus_mmio_map(busdev, 1, 0x42000000); /* PCI config */
+    sysbus_connect_irq(busdev, 0, sic[27]);
+    sysbus_connect_irq(busdev, 1, sic[28]);
+    sysbus_connect_irq(busdev, 2, sic[29]);
+    sysbus_connect_irq(busdev, 3, sic[30]);
+    pci_bus = (PCIBus *)qdev_get_child_bus(dev, "pci");
+
     /* The Versatile PCI bridge does not provide access to PCI IO space,
        so many of the qemu PCI devices are not useable.  */
     for(n = 0; n < nb_nics; n++) {
         nd = &nd_table[n];
-        if (!nd->model)
-            nd->model = done_smc ? "rtl8139" : "smc91c111";
-        if (strcmp(nd->model, "smc91c111") == 0) {
+
+        if (!done_smc && (!nd->model || strcmp(nd->model, "smc91c111") == 0)) {
             smc91c111_init(nd, 0x10010000, sic[25]);
+            done_smc = 1;
         } else {
-            pci_nic_init(pci_bus, nd, -1);
+            pci_nic_init_nofail(nd, "rtl8139", NULL);
         }
     }
     if (usb_enabled) {
-        usb_ohci_init_pci(pci_bus, 3, -1);
+        usb_ohci_init_pci(pci_bus, -1);
     }
-    scsi_hba = lsi_scsi_init(pci_bus, -1);
-    for (n = 0; n < MAX_DISKS; n++) {
-        if (bs_table[n]) {
-            lsi_scsi_attach(scsi_hba, bs_table[n], n);
-        }
+    n = drive_get_max_bus(IF_SCSI);
+    while (n >= 0) {
+        pci_create_simple(pci_bus, -1, "lsi53c895a");
+        n--;
     }
 
-    pl011_init(0x101f1000, pic[12], serial_hds[0]);
-    pl011_init(0x101f2000, pic[13], serial_hds[1]);
-    pl011_init(0x101f3000, pic[14], serial_hds[2]);
-    pl011_init(0x10009000, sic[6], serial_hds[3]);
+    sysbus_create_simple("pl011", 0x101f1000, pic[12]);
+    sysbus_create_simple("pl011", 0x101f2000, pic[13]);
+    sysbus_create_simple("pl011", 0x101f3000, pic[14]);
+    sysbus_create_simple("pl011", 0x10009000, sic[6]);
 
-    pl080_init(0x10130000, pic[17], 8);
-    sp804_init(0x101e2000, pic[4]);
-    sp804_init(0x101e3000, pic[5]);
+    sysbus_create_simple("pl080", 0x10130000, pic[17]);
+    sysbus_create_simple("sp804", 0x101e2000, pic[4]);
+    sysbus_create_simple("sp804", 0x101e3000, pic[5]);
 
     /* The versatile/PB actually has a modified Color LCD controller
        that includes hardware cursor support from the PL111.  */
-    pl110_init(ds, 0x10120000, pic[16], 1);
+    dev = sysbus_create_simple("pl110_versatile", 0x10120000, pic[16]);
+    /* Wire up the mux control signals from the SYS_CLCD register */
+    qdev_connect_gpio_out(sysctl, 0, qdev_get_gpio_in(dev, 0));
 
-    pl181_init(0x10005000, sd_bdrv, sic[22], sic[1]);
-#if 0
-    /* Disabled because there's no way of specifying a block device.  */
-    pl181_init(0x1000b000, NULL, sic, 23, 2);
-#endif
+    sysbus_create_varargs("pl181", 0x10005000, sic[22], sic[1], NULL);
+    sysbus_create_varargs("pl181", 0x1000b000, sic[23], sic[2], NULL);
+
+    /* Add PL031 Real Time Clock. */
+    sysbus_create_simple("pl031", 0x101e8000, pic[10]);
 
     /* Memory map for Versatile/PB:  */
     /* 0x10000000 System registers.  */
@@ -259,40 +309,69 @@ static void versatile_init(int ram_size, int vga_ram_size, int boot_device,
     /*  0x101f3000 UART2.  */
     /* 0x101f4000 SSPI.  */
 
-    arm_load_kernel(env, ram_size, kernel_filename, kernel_cmdline,
-                    initrd_filename, board_id, 0x0);
+    versatile_binfo.ram_size = ram_size;
+    versatile_binfo.kernel_filename = kernel_filename;
+    versatile_binfo.kernel_cmdline = kernel_cmdline;
+    versatile_binfo.initrd_filename = initrd_filename;
+    versatile_binfo.board_id = board_id;
+    arm_load_kernel(env, &versatile_binfo);
 }
 
-static void vpb_init(int ram_size, int vga_ram_size, int boot_device,
-                     DisplayState *ds, const char **fd_filename, int snapshot,
+static void vpb_init(ram_addr_t ram_size,
+                     const char *boot_device,
                      const char *kernel_filename, const char *kernel_cmdline,
                      const char *initrd_filename, const char *cpu_model)
 {
-    versatile_init(ram_size, vga_ram_size, boot_device,
-                   ds, fd_filename, snapshot,
+    versatile_init(ram_size,
+                   boot_device,
                    kernel_filename, kernel_cmdline,
                    initrd_filename, cpu_model, 0x183);
 }
 
-static void vab_init(int ram_size, int vga_ram_size, int boot_device,
-                     DisplayState *ds, const char **fd_filename, int snapshot,
+static void vab_init(ram_addr_t ram_size,
+                     const char *boot_device,
                      const char *kernel_filename, const char *kernel_cmdline,
                      const char *initrd_filename, const char *cpu_model)
 {
-    versatile_init(ram_size, vga_ram_size, boot_device,
-                   ds, fd_filename, snapshot,
+    versatile_init(ram_size,
+                   boot_device,
                    kernel_filename, kernel_cmdline,
                    initrd_filename, cpu_model, 0x25e);
 }
 
-QEMUMachine versatilepb_machine = {
-    "versatilepb",
-    "ARM Versatile/PB (ARM926EJ-S)",
-    vpb_init,
+static QEMUMachine versatilepb_machine = {
+    .name = "versatilepb",
+    .desc = "ARM Versatile/PB (ARM926EJ-S)",
+    .init = vpb_init,
+    .use_scsi = 1,
 };
 
-QEMUMachine versatileab_machine = {
-    "versatileab",
-    "ARM Versatile/AB (ARM926EJ-S)",
-    vab_init,
+static QEMUMachine versatileab_machine = {
+    .name = "versatileab",
+    .desc = "ARM Versatile/AB (ARM926EJ-S)",
+    .init = vab_init,
+    .use_scsi = 1,
 };
+
+static void versatile_machine_init(void)
+{
+    qemu_register_machine(&versatilepb_machine);
+    qemu_register_machine(&versatileab_machine);
+}
+
+machine_init(versatile_machine_init);
+
+static SysBusDeviceInfo vpb_sic_info = {
+    .init = vpb_sic_init,
+    .qdev.name = "versatilepb_sic",
+    .qdev.size = sizeof(vpb_sic_state),
+    .qdev.vmsd = &vmstate_vpb_sic,
+    .qdev.no_user = 1,
+};
+
+static void versatilepb_register_devices(void)
+{
+    sysbus_register_withprop(&vpb_sic_info);
+}
+
+device_init(versatilepb_register_devices)

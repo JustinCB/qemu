@@ -1,8 +1,8 @@
 /*
  * QEMU ADB support
- * 
+ *
  * Copyright (c) 2004 Fabrice Bellard
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
@@ -21,7 +21,19 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "vl.h"
+#include "hw.h"
+#include "adb.h"
+#include "console.h"
+
+/* debug ADB */
+//#define DEBUG_ADB
+
+#ifdef DEBUG_ADB
+#define ADB_DPRINTF(fmt, ...) \
+do { printf("ADB: " fmt , ## __VA_ARGS__); } while (0)
+#else
+#define ADB_DPRINTF(fmt, ...)
+#endif
 
 /* ADB commands */
 #define ADB_BUSRESET		0x00
@@ -96,9 +108,9 @@ int adb_poll(ADBBusState *s, uint8_t *obuf)
     return olen;
 }
 
-ADBDevice *adb_register_device(ADBBusState *s, int devaddr, 
-                               ADBDeviceRequest *devreq, 
-                               ADBDeviceReset *devreset, 
+ADBDevice *adb_register_device(ADBBusState *s, int devaddr,
+                               ADBDeviceRequest *devreq,
+                               ADBDeviceReset *devreset,
                                void *opaque)
 {
     ADBDevice *d;
@@ -110,6 +122,7 @@ ADBDevice *adb_register_device(ADBBusState *s, int devaddr,
     d->devreq = devreq;
     d->devreset = devreset;
     d->opaque = opaque;
+    qemu_register_reset((QEMUResetHandler *)devreset, d);
     return d;
 }
 
@@ -248,6 +261,20 @@ static int adb_kbd_request(ADBDevice *d, uint8_t *obuf,
     return olen;
 }
 
+static const VMStateDescription vmstate_adb_kbd = {
+    .name = "adb_kbd",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .minimum_version_id_old = 1,
+    .fields      = (VMStateField[]) {
+        VMSTATE_BUFFER(data, KBDState),
+        VMSTATE_INT32(rptr, KBDState),
+        VMSTATE_INT32(wptr, KBDState),
+        VMSTATE_INT32(count, KBDState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static int adb_kbd_reset(ADBDevice *d)
 {
     KBDState *s = d->opaque;
@@ -263,11 +290,11 @@ void adb_kbd_init(ADBBusState *bus)
 {
     ADBDevice *d;
     KBDState *s;
-    s = qemu_mallocz(sizeof(KBDState));
+    s = g_malloc0(sizeof(KBDState));
     d = adb_register_device(bus, ADB_KEYBOARD, adb_kbd_request,
                             adb_kbd_reset, s);
-    adb_kbd_reset(d);
     qemu_add_kbd_event_handler(adb_kbd_put_keycode, d);
+    vmstate_register(NULL, -1, &vmstate_adb_kbd, s);
 }
 
 /***************************************************************/
@@ -299,31 +326,31 @@ static int adb_mouse_poll(ADBDevice *d, uint8_t *obuf)
     if (s->last_buttons_state == s->buttons_state &&
         s->dx == 0 && s->dy == 0)
         return 0;
-        
+
     dx = s->dx;
     if (dx < -63)
         dx = -63;
     else if (dx > 63)
         dx = 63;
-    
+
     dy = s->dy;
     if (dy < -63)
         dy = -63;
     else if (dy > 63)
         dy = 63;
-    
+
     s->dx -= dx;
     s->dy -= dy;
     s->last_buttons_state = s->buttons_state;
-    
+
     dx &= 0x7f;
     dy &= 0x7f;
-    
+
     if (!(s->buttons_state & MOUSE_EVENT_LBUTTON))
         dy |= 0x80;
     if (!(s->buttons_state & MOUSE_EVENT_RBUTTON))
         dx |= 0x80;
-    
+
     obuf[0] = dy;
     obuf[1] = dx;
     return 2;
@@ -334,7 +361,7 @@ static int adb_mouse_request(ADBDevice *d, uint8_t *obuf,
 {
     MouseState *s = d->opaque;
     int cmd, reg, olen;
-    
+
     if ((buf[0] & 0x0f) == ADB_FLUSH) {
         /* flush mouse fifo */
         s->buttons_state = s->last_buttons_state;
@@ -349,6 +376,7 @@ static int adb_mouse_request(ADBDevice *d, uint8_t *obuf,
     olen = 0;
     switch(cmd) {
     case ADB_WRITEREG:
+        ADB_DPRINTF("write reg %d val 0x%2.2x\n", reg, buf[1]);
         switch(reg) {
         case 2:
             break;
@@ -381,6 +409,8 @@ static int adb_mouse_request(ADBDevice *d, uint8_t *obuf,
             olen = 2;
             break;
         }
+        ADB_DPRINTF("read reg %d obuf[0] 0x%2.2x obuf[1] 0x%2.2x\n", reg,
+                    obuf[0], obuf[1]);
         break;
     }
     return olen;
@@ -397,14 +427,29 @@ static int adb_mouse_reset(ADBDevice *d)
     return 0;
 }
 
+static const VMStateDescription vmstate_adb_mouse = {
+    .name = "adb_mouse",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .minimum_version_id_old = 1,
+    .fields      = (VMStateField[]) {
+        VMSTATE_INT32(buttons_state, MouseState),
+        VMSTATE_INT32(last_buttons_state, MouseState),
+        VMSTATE_INT32(dx, MouseState),
+        VMSTATE_INT32(dy, MouseState),
+        VMSTATE_INT32(dz, MouseState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void adb_mouse_init(ADBBusState *bus)
 {
     ADBDevice *d;
     MouseState *s;
 
-    s = qemu_mallocz(sizeof(MouseState));
+    s = g_malloc0(sizeof(MouseState));
     d = adb_register_device(bus, ADB_MOUSE, adb_mouse_request,
                             adb_mouse_reset, s);
-    adb_mouse_reset(d);
     qemu_add_mouse_event_handler(adb_mouse_event, d, 0, "QEMU ADB Mouse");
+    vmstate_register(NULL, -1, &vmstate_adb_mouse, s);
 }

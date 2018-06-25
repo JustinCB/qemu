@@ -1,16 +1,17 @@
-/* 
+/*
  * Arm PrimeCell PL011 UART
  *
  * Copyright (c) 2006 CodeSourcery.
  * Written by Paul Brook
  *
- * This code is licenced under the GPL.
+ * This code is licensed under the GPL.
  */
 
-#include "vl.h"
+#include "sysbus.h"
+#include "qemu-char.h"
 
 typedef struct {
-    uint32_t base;
+    SysBusDevice busdev;
     uint32_t readbuff;
     uint32_t flags;
     uint32_t lcr;
@@ -28,6 +29,7 @@ typedef struct {
     int read_trigger;
     CharDriverState *chr;
     qemu_irq irq;
+    const unsigned char *id;
 } pl011_state;
 
 #define PL011_INT_TX 0x20
@@ -38,13 +40,15 @@ typedef struct {
 #define PL011_FLAG_TXFF 0x20
 #define PL011_FLAG_RXFE 0x10
 
-static const unsigned char pl011_id[] =
-{ 0x11, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1 };
+static const unsigned char pl011_id_arm[8] =
+  { 0x11, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1 };
+static const unsigned char pl011_id_luminary[8] =
+  { 0x11, 0x00, 0x18, 0x01, 0x0d, 0xf0, 0x05, 0xb1 };
 
 static void pl011_update(pl011_state *s)
 {
     uint32_t flags;
-    
+
     flags = s->int_level & s->int_enabled;
     qemu_set_irq(s->irq, flags != 0);
 }
@@ -54,9 +58,8 @@ static uint32_t pl011_read(void *opaque, target_phys_addr_t offset)
     pl011_state *s = (pl011_state *)opaque;
     uint32_t c;
 
-    offset -= s->base;
     if (offset >= 0xfe0 && offset < 0x1000) {
-        return pl011_id[(offset - 0xfe0) >> 2];
+        return s->id[(offset - 0xfe0) >> 2];
     }
     switch (offset >> 2) {
     case 0: /* UARTDR */
@@ -73,6 +76,7 @@ static uint32_t pl011_read(void *opaque, target_phys_addr_t offset)
         if (s->read_count == s->read_trigger - 1)
             s->int_level &= ~ PL011_INT_RX;
         pl011_update(s);
+        qemu_chr_accept_input(s->chr);
         return c;
     case 1: /* UARTCR */
         return 0;
@@ -99,7 +103,7 @@ static uint32_t pl011_read(void *opaque, target_phys_addr_t offset)
     case 18: /* UARTDMACR */
         return s->dmacr;
     default:
-        cpu_abort (cpu_single_env, "pl011_read: Bad offset %x\n", offset);
+        hw_error("pl011_read: Bad offset %x\n", (int)offset);
         return 0;
     }
 }
@@ -124,18 +128,20 @@ static void pl011_write(void *opaque, target_phys_addr_t offset,
     pl011_state *s = (pl011_state *)opaque;
     unsigned char ch;
 
-    offset -= s->base;
     switch (offset >> 2) {
     case 0: /* UARTDR */
         /* ??? Check if transmitter is enabled.  */
         ch = value;
         if (s->chr)
-            qemu_chr_write(s->chr, &ch, 1);
+            qemu_chr_fe_write(s->chr, &ch, 1);
         s->int_level |= PL011_INT_TX;
         pl011_update(s);
         break;
     case 1: /* UARTCR */
         s->cr = value;
+        break;
+    case 6: /* UARTFR */
+        /* Writes to Flag register are ignored.  */
         break;
     case 8: /* UARTUARTILPR */
         s->ilpr = value;
@@ -169,14 +175,14 @@ static void pl011_write(void *opaque, target_phys_addr_t offset,
     case 18: /* UARTDMACR */
         s->dmacr = value;
         if (value & 3)
-            cpu_abort(cpu_single_env, "PL011: DMA not implemented\n");
+            hw_error("PL011: DMA not implemented\n");
         break;
     default:
-        cpu_abort (cpu_single_env, "pl011_write: Bad offset %x\n", offset);
+        hw_error("pl011_write: Bad offset %x\n", (int)offset);
     }
 }
 
-static int pl011_can_recieve(void *opaque)
+static int pl011_can_receive(void *opaque)
 {
     pl011_state *s = (pl011_state *)opaque;
 
@@ -186,7 +192,7 @@ static int pl011_can_recieve(void *opaque)
         return s->read_count < 1;
 }
 
-static void pl011_recieve(void *opaque, const uint8_t *buf, int size)
+static void pl011_put_fifo(void *opaque, uint32_t value)
 {
     pl011_state *s = (pl011_state *)opaque;
     int slot;
@@ -194,7 +200,7 @@ static void pl011_recieve(void *opaque, const uint8_t *buf, int size)
     slot = s->read_pos + s->read_count;
     if (slot >= 16)
         slot -= 16;
-    s->read_fifo[slot] = *buf;
+    s->read_fifo[slot] = value;
     s->read_count++;
     s->flags &= ~PL011_FLAG_RXFE;
     if (s->cr & 0x10 || s->read_count == 16) {
@@ -206,44 +212,95 @@ static void pl011_recieve(void *opaque, const uint8_t *buf, int size)
     }
 }
 
-static void pl011_event(void *opaque, int event)
+static void pl011_receive(void *opaque, const uint8_t *buf, int size)
 {
-    /* ??? Should probably implement break.  */
+    pl011_put_fifo(opaque, *buf);
 }
 
-static CPUReadMemoryFunc *pl011_readfn[] = {
+static void pl011_event(void *opaque, int event)
+{
+    if (event == CHR_EVENT_BREAK)
+        pl011_put_fifo(opaque, 0x400);
+}
+
+static CPUReadMemoryFunc * const pl011_readfn[] = {
    pl011_read,
    pl011_read,
    pl011_read
 };
 
-static CPUWriteMemoryFunc *pl011_writefn[] = {
+static CPUWriteMemoryFunc * const pl011_writefn[] = {
    pl011_write,
    pl011_write,
    pl011_write
 };
 
-void pl011_init(uint32_t base, qemu_irq irq,
-                CharDriverState *chr)
+static const VMStateDescription vmstate_pl011 = {
+    .name = "pl011",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .minimum_version_id_old = 1,
+    .fields      = (VMStateField[]) {
+        VMSTATE_UINT32(readbuff, pl011_state),
+        VMSTATE_UINT32(flags, pl011_state),
+        VMSTATE_UINT32(lcr, pl011_state),
+        VMSTATE_UINT32(cr, pl011_state),
+        VMSTATE_UINT32(dmacr, pl011_state),
+        VMSTATE_UINT32(int_enabled, pl011_state),
+        VMSTATE_UINT32(int_level, pl011_state),
+        VMSTATE_UINT32_ARRAY(read_fifo, pl011_state, 16),
+        VMSTATE_UINT32(ilpr, pl011_state),
+        VMSTATE_UINT32(ibrd, pl011_state),
+        VMSTATE_UINT32(fbrd, pl011_state),
+        VMSTATE_UINT32(ifl, pl011_state),
+        VMSTATE_INT32(read_pos, pl011_state),
+        VMSTATE_INT32(read_count, pl011_state),
+        VMSTATE_INT32(read_trigger, pl011_state),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static int pl011_init(SysBusDevice *dev, const unsigned char *id)
 {
     int iomemtype;
-    pl011_state *s;
+    pl011_state *s = FROM_SYSBUS(pl011_state, dev);
 
-    s = (pl011_state *)qemu_mallocz(sizeof(pl011_state));
-    iomemtype = cpu_register_io_memory(0, pl011_readfn,
-                                       pl011_writefn, s);
-    cpu_register_physical_memory(base, 0x00001000, iomemtype);
-    s->base = base;
-    s->irq = irq;
-    s->chr = chr;
+    iomemtype = cpu_register_io_memory(pl011_readfn,
+                                       pl011_writefn, s,
+                                       DEVICE_NATIVE_ENDIAN);
+    sysbus_init_mmio(dev, 0x1000,iomemtype);
+    sysbus_init_irq(dev, &s->irq);
+    s->id = id;
+    s->chr = qdev_init_chardev(&dev->qdev);
+
     s->read_trigger = 1;
     s->ifl = 0x12;
     s->cr = 0x300;
     s->flags = 0x90;
-    if (chr){ 
-        qemu_chr_add_handlers(chr, pl011_can_recieve, pl011_recieve,
+    if (s->chr) {
+        qemu_chr_add_handlers(s->chr, pl011_can_receive, pl011_receive,
                               pl011_event, s);
     }
-    /* ??? Save/restore.  */
+    vmstate_register(&dev->qdev, -1, &vmstate_pl011, s);
+    return 0;
 }
 
+static int pl011_init_arm(SysBusDevice *dev)
+{
+    return pl011_init(dev, pl011_id_arm);
+}
+
+static int pl011_init_luminary(SysBusDevice *dev)
+{
+    return pl011_init(dev, pl011_id_luminary);
+}
+
+static void pl011_register_devices(void)
+{
+    sysbus_register_dev("pl011", sizeof(pl011_state),
+                        pl011_init_arm);
+    sysbus_register_dev("pl011_luminary", sizeof(pl011_state),
+                        pl011_init_luminary);
+}
+
+device_init(pl011_register_devices)

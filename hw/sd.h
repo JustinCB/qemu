@@ -1,4 +1,4 @@
-/* 
+/*
  * SD Memory Card emulation.  Mostly correct for MMC too.
  *
  * Copyright (c) 2006 Andrzej Zaborowski  <balrog@zabor.org>
@@ -29,8 +29,6 @@
 #ifndef __hw_sd_h
 #define __hw_sd_h		1
 
-#include <vl.h>
-
 #define OUT_OF_RANGE		(1 << 31)
 #define ADDRESS_ERROR		(1 << 30)
 #define BLOCK_LEN_ERROR		(1 << 29)
@@ -56,27 +54,26 @@
 typedef enum {
     sd_none = -1,
     sd_bc = 0,	/* broadcast -- no response */
-    sd_bcr,		/* broadcast with response */
-    sd_ac,		/* addressed -- no data transfer */
+    sd_bcr,	/* broadcast with response */
+    sd_ac,	/* addressed -- no data transfer */
     sd_adtc,	/* addressed with data transfer */
 } sd_cmd_type_t;
 
-struct sd_request_s {
+typedef struct {
     uint8_t cmd;
     uint32_t arg;
     uint8_t crc;
-};
+} SDRequest;
 
 typedef struct SDState SDState;
 
-SDState *sd_init(BlockDriverState *bs);
-int sd_do_command(SDState *sd, struct sd_request_s *req,
+SDState *sd_init(BlockDriverState *bs, int is_spi);
+int sd_do_command(SDState *sd, SDRequest *req,
                   uint8_t *response);
 void sd_write_data(SDState *sd, uint8_t value);
 uint8_t sd_read_data(SDState *sd);
-void sd_set_cb(SDState *sd, void *opaque,
-               void (*readonly_cb)(void *, int),
-               void (*inserted_cb)(void *, int));
+void sd_set_cb(SDState *sd, qemu_irq readonly, qemu_irq insert);
 int sd_data_ready(SDState *sd);
+void sd_enable(SDState *sd, int enable);
 
 #endif	/* __hw_sd_h */

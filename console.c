@@ -1,8 +1,8 @@
 /*
  * QEMU graphical console
- * 
+ *
  * Copyright (c) 2004 Fabrice Bellard
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
@@ -21,7 +21,9 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "vl.h"
+#include "qemu-common.h"
+#include "console.h"
+#include "qemu-timer.h"
 
 //#define DEBUG_CONSOLE
 #define DEFAULT_BACKSCROLL 512
@@ -59,7 +61,7 @@ typedef struct QEMUFIFO {
     int count, wptr, rptr;
 } QEMUFIFO;
 
-int qemu_fifo_write(QEMUFIFO *f, const uint8_t *buf, int len1)
+static int qemu_fifo_write(QEMUFIFO *f, const uint8_t *buf, int len1)
 {
     int l, len;
 
@@ -82,7 +84,7 @@ int qemu_fifo_write(QEMUFIFO *f, const uint8_t *buf, int len1)
     return len1;
 }
 
-int qemu_fifo_read(QEMUFIFO *f, uint8_t *buf, int len1)
+static int qemu_fifo_read(QEMUFIFO *f, uint8_t *buf, int len1)
 {
     int l, len;
 
@@ -104,15 +106,23 @@ int qemu_fifo_read(QEMUFIFO *f, uint8_t *buf, int len1)
     return len1;
 }
 
+typedef enum {
+    GRAPHIC_CONSOLE,
+    TEXT_CONSOLE,
+    TEXT_CONSOLE_FIXED_SIZE
+} console_type_t;
+
 /* ??? This is mis-named.
    It is used for both text and graphical consoles.  */
 struct TextConsole {
-    int text_console; /* true if text console */
+    int index;
+    console_type_t console_type;
     DisplayState *ds;
     /* Graphic console state.  */
     vga_hw_update_ptr hw_update;
     vga_hw_invalidate_ptr hw_invalidate;
     vga_hw_screen_dump_ptr hw_screen_dump;
+    vga_hw_text_update_ptr hw_text_update;
     void *hw;
 
     int g_width, g_height;
@@ -127,6 +137,13 @@ struct TextConsole {
     TextAttributes t_attrib_default; /* default text attributes */
     TextAttributes t_attrib; /* currently active text attributes */
     TextCell *cells;
+    int text_x[2], text_y[2], cursor_invalidate;
+    int echo;
+
+    int update_x0;
+    int update_y0;
+    int update_x1;
+    int update_y1;
 
     enum TTYState state;
     int esc_params[MAX_ESC_PARAMS];
@@ -139,6 +156,7 @@ struct TextConsole {
     QEMUTimer *kbd_timer;
 };
 
+static DisplayState *display_state;
 static TextConsole *active_console;
 static TextConsole *consoles[MAX_CONSOLES];
 static int nb_consoles = 0;
@@ -151,16 +169,30 @@ void vga_hw_update(void)
 
 void vga_hw_invalidate(void)
 {
-    if (active_console->hw_invalidate)
+    if (active_console && active_console->hw_invalidate)
         active_console->hw_invalidate(active_console->hw);
 }
 
 void vga_hw_screen_dump(const char *filename)
 {
-    /* There is currently no was of specifying which screen we want to dump,
-       so always dump the dirst one.  */
-    if (consoles[0]->hw_screen_dump)
+    TextConsole *previous_active_console;
+
+    previous_active_console = active_console;
+
+    /* There is currently no way of specifying which screen we want to dump,
+       so always dump the first one.  */
+    console_select(0);
+    if (consoles[0] && consoles[0]->hw_screen_dump) {
         consoles[0]->hw_screen_dump(consoles[0]->hw, filename);
+    }
+
+    console_select(previous_active_console->index);
+}
+
+void vga_hw_text_update(console_ch_t *chardata)
+{
+    if (active_console && active_console->hw_text_update)
+        active_console->hw_text_update(active_console->hw, chardata);
 }
 
 /* convert a RGBA color to a color index usable in graphic primitives */
@@ -168,14 +200,14 @@ static unsigned int vga_get_color(DisplayState *ds, unsigned int rgba)
 {
     unsigned int r, g, b, color;
 
-    switch(ds->depth) {
+    switch(ds_get_bits_per_pixel(ds)) {
 #if 0
     case 8:
         r = (rgba >> 16) & 0xff;
         g = (rgba >> 8) & 0xff;
         b = (rgba) & 0xff;
-        color = (rgb_to_index[r] * 6 * 6) + 
-            (rgb_to_index[g] * 6) + 
+        color = (rgb_to_index[r] * 6 * 6) +
+            (rgb_to_index[g] * 6) +
             (rgb_to_index[b]);
         break;
 #endif
@@ -199,15 +231,15 @@ static unsigned int vga_get_color(DisplayState *ds, unsigned int rgba)
     return color;
 }
 
-static void vga_fill_rect (DisplayState *ds, 
+static void vga_fill_rect (DisplayState *ds,
                            int posx, int posy, int width, int height, uint32_t color)
 {
     uint8_t *d, *d1;
     int x, y, bpp;
-    
-    bpp = (ds->depth + 7) >> 3;
-    d1 = ds->data + 
-        ds->linesize * posy + bpp * posx;
+
+    bpp = (ds_get_bits_per_pixel(ds) + 7) >> 3;
+    d1 = ds_get_data(ds) +
+        ds_get_linesize(ds) * posy + bpp * posx;
     for (y = 0; y < height; y++) {
         d = d1;
         switch(bpp) {
@@ -230,7 +262,7 @@ static void vga_fill_rect (DisplayState *ds,
             }
             break;
         }
-        d1 += ds->linesize;
+        d1 += ds_get_linesize(ds);
     }
 }
 
@@ -241,27 +273,27 @@ static void vga_bitblt(DisplayState *ds, int xs, int ys, int xd, int yd, int w, 
     uint8_t *d;
     int wb, y, bpp;
 
-    bpp = (ds->depth + 7) >> 3;
+    bpp = (ds_get_bits_per_pixel(ds) + 7) >> 3;
     wb = w * bpp;
     if (yd <= ys) {
-        s = ds->data + 
-            ds->linesize * ys + bpp * xs;
-        d = ds->data + 
-            ds->linesize * yd + bpp * xd;
+        s = ds_get_data(ds) +
+            ds_get_linesize(ds) * ys + bpp * xs;
+        d = ds_get_data(ds) +
+            ds_get_linesize(ds) * yd + bpp * xd;
         for (y = 0; y < h; y++) {
             memmove(d, s, wb);
-            d += ds->linesize;
-            s += ds->linesize;
+            d += ds_get_linesize(ds);
+            s += ds_get_linesize(ds);
         }
     } else {
-        s = ds->data + 
-            ds->linesize * (ys + h - 1) + bpp * xs;
-        d = ds->data + 
-            ds->linesize * (yd + h - 1) + bpp * xd;
+        s = ds_get_data(ds) +
+            ds_get_linesize(ds) * (ys + h - 1) + bpp * xs;
+        d = ds_get_data(ds) +
+            ds_get_linesize(ds) * (yd + h - 1) + bpp * xd;
        for (y = 0; y < h; y++) {
             memmove(d, s, wb);
-            d -= ds->linesize;
-            s -= ds->linesize;
+            d -= ds_get_linesize(ds);
+            s -= ds_get_linesize(ds);
         }
     }
 }
@@ -281,7 +313,7 @@ static void vga_bitblt(DisplayState *ds, int xs, int ys, int xd, int yd, int w, 
 		(((uint32_t)(__x) & (uint32_t)0x00ff0000UL) >>  8) | \
 		(((uint32_t)(__x) & (uint32_t)0xff000000UL) >> 24) ))
 
-#ifdef WORDS_BIGENDIAN
+#ifdef HOST_WORDS_BIGENDIAN
 #define PAT(x) x
 #else
 #define PAT(x) cbswap_32(x)
@@ -315,6 +347,7 @@ static const uint32_t dmask4[4] = {
 
 static uint32_t color_table[2][8];
 
+#ifndef CONFIG_CURSES
 enum color_names {
     COLOR_BLACK   = 0,
     COLOR_RED     = 1,
@@ -325,6 +358,7 @@ enum color_names {
     COLOR_CYAN    = 6,
     COLOR_WHITE   = 7
 };
+#endif
 
 static const uint32_t color_table_rgb[2][8] = {
     {   /* dark */
@@ -351,7 +385,7 @@ static const uint32_t color_table_rgb[2][8] = {
 
 static inline unsigned int col_expand(DisplayState *ds, unsigned int col)
 {
-    switch(ds->depth) {
+    switch(ds_get_bits_per_pixel(ds)) {
     case 8:
         col |= col << 8;
         col |= col << 16;
@@ -399,7 +433,7 @@ static void console_print_text_attributes(TextAttributes *t_attrib, char ch)
 }
 #endif
 
-static void vga_putcharxy(DisplayState *ds, int x, int y, int ch, 
+static void vga_putcharxy(DisplayState *ds, int x, int y, int ch,
                           TextAttributes *t_attrib)
 {
     uint8_t *d;
@@ -421,13 +455,13 @@ static void vga_putcharxy(DisplayState *ds, int x, int y, int ch,
         bgcol = color_table[t_attrib->bold][t_attrib->bgcol];
     }
 
-    bpp = (ds->depth + 7) >> 3;
-    d = ds->data + 
-        ds->linesize * y * FONT_HEIGHT + bpp * x * FONT_WIDTH;
-    linesize = ds->linesize;
+    bpp = (ds_get_bits_per_pixel(ds) + 7) >> 3;
+    d = ds_get_data(ds) +
+        ds_get_linesize(ds) * y * FONT_HEIGHT + bpp * x * FONT_WIDTH;
+    linesize = ds_get_linesize(ds);
     font_ptr = vgafont16 + FONT_HEIGHT * ch;
     xorcol = bgcol ^ fgcol;
-    switch(ds->depth) {
+    switch(ds_get_bits_per_pixel(ds)) {
     case 8:
         for(i = 0; i < FONT_HEIGHT; i++) {
             font_data = *font_ptr++;
@@ -488,7 +522,7 @@ static void text_console_resize(TextConsole *s)
     if (s->width < w1)
         w1 = s->width;
 
-    cells = qemu_malloc(s->width * s->total_height * sizeof(TextCell));
+    cells = g_malloc(s->width * s->total_height * sizeof(TextCell));
     for(y = 0; y < s->total_height; y++) {
         c = &cells[y * s->width];
         if (w1 > 0) {
@@ -503,8 +537,28 @@ static void text_console_resize(TextConsole *s)
             c++;
         }
     }
-    free(s->cells);
+    g_free(s->cells);
     s->cells = cells;
+}
+
+static inline void text_update_xy(TextConsole *s, int x, int y)
+{
+    s->text_x[0] = MIN(s->text_x[0], x);
+    s->text_x[1] = MAX(s->text_x[1], x);
+    s->text_y[0] = MIN(s->text_y[0], y);
+    s->text_y[1] = MAX(s->text_y[1], y);
+}
+
+static void invalidate_xy(TextConsole *s, int x, int y)
+{
+    if (s->update_x0 > x * FONT_WIDTH)
+        s->update_x0 = x * FONT_WIDTH;
+    if (s->update_y0 > y * FONT_HEIGHT)
+        s->update_y0 = y * FONT_HEIGHT;
+    if (s->update_x1 < (x + 1) * FONT_WIDTH)
+        s->update_x1 = (x + 1) * FONT_WIDTH;
+    if (s->update_y1 < (y + 1) * FONT_HEIGHT)
+        s->update_y1 = (y + 1) * FONT_HEIGHT;
 }
 
 static void update_xy(TextConsole *s, int x, int y)
@@ -513,16 +567,20 @@ static void update_xy(TextConsole *s, int x, int y)
     int y1, y2;
 
     if (s == active_console) {
+        if (!ds_get_bits_per_pixel(s->ds)) {
+            text_update_xy(s, x, y);
+            return;
+        }
+
         y1 = (s->y_base + y) % s->total_height;
         y2 = y1 - s->y_displayed;
         if (y2 < 0)
             y2 += s->total_height;
         if (y2 < s->height) {
             c = &s->cells[y1 * s->width + x];
-            vga_putcharxy(s->ds, x, y2, c->ch, 
+            vga_putcharxy(s->ds, x, y2, c->ch,
                           &(c->t_attrib));
-            dpy_update(s->ds, x * FONT_WIDTH, y2 * FONT_HEIGHT, 
-                       FONT_WIDTH, FONT_HEIGHT);
+            invalidate_xy(s, x, y2);
         }
     }
 }
@@ -534,6 +592,12 @@ static void console_show_cursor(TextConsole *s, int show)
 
     if (s == active_console) {
         int x = s->x;
+
+        if (!ds_get_bits_per_pixel(s->ds)) {
+            s->cursor_invalidate = 1;
+            return;
+        }
+
         if (x >= s->width) {
             x = s->width - 1;
         }
@@ -550,8 +614,7 @@ static void console_show_cursor(TextConsole *s, int show)
             } else {
                 vga_putcharxy(s->ds, x, y, c->ch, &(c->t_attrib));
             }
-            dpy_update(s->ds, x * FONT_WIDTH, y * FONT_HEIGHT, 
-                       FONT_WIDTH, FONT_HEIGHT);
+            invalidate_xy(s, x, y);
         }
     }
 }
@@ -561,33 +624,41 @@ static void console_refresh(TextConsole *s)
     TextCell *c;
     int x, y, y1;
 
-    if (s != active_console) 
+    if (s != active_console)
         return;
+    if (!ds_get_bits_per_pixel(s->ds)) {
+        s->text_x[0] = 0;
+        s->text_y[0] = 0;
+        s->text_x[1] = s->width - 1;
+        s->text_y[1] = s->height - 1;
+        s->cursor_invalidate = 1;
+        return;
+    }
 
-    vga_fill_rect(s->ds, 0, 0, s->ds->width, s->ds->height,
+    vga_fill_rect(s->ds, 0, 0, ds_get_width(s->ds), ds_get_height(s->ds),
                   color_table[0][COLOR_BLACK]);
     y1 = s->y_displayed;
     for(y = 0; y < s->height; y++) {
         c = s->cells + y1 * s->width;
         for(x = 0; x < s->width; x++) {
-            vga_putcharxy(s->ds, x, y, c->ch, 
+            vga_putcharxy(s->ds, x, y, c->ch,
                           &(c->t_attrib));
             c++;
         }
         if (++y1 == s->total_height)
             y1 = 0;
     }
-    dpy_update(s->ds, 0, 0, s->ds->width, s->ds->height);
     console_show_cursor(s, 1);
+    dpy_update(s->ds, 0, 0, ds_get_width(s->ds), ds_get_height(s->ds));
 }
 
 static void console_scroll(int ydelta)
 {
     TextConsole *s;
     int i, y1;
-    
+
     s = active_console;
-    if (!s || !s->text_console)
+    if (!s || (s->console_type == GRAPHIC_CONSOLE))
         return;
 
     if (ydelta > 0) {
@@ -640,14 +711,24 @@ static void console_put_lf(TextConsole *s)
             c++;
         }
         if (s == active_console && s->y_displayed == s->y_base) {
-            vga_bitblt(s->ds, 0, FONT_HEIGHT, 0, 0, 
-                       s->width * FONT_WIDTH, 
+            if (!ds_get_bits_per_pixel(s->ds)) {
+                s->text_x[0] = 0;
+                s->text_y[0] = 0;
+                s->text_x[1] = s->width - 1;
+                s->text_y[1] = s->height - 1;
+                return;
+            }
+
+            vga_bitblt(s->ds, 0, FONT_HEIGHT, 0, 0,
+                       s->width * FONT_WIDTH,
                        (s->height - 1) * FONT_HEIGHT);
             vga_fill_rect(s->ds, 0, (s->height - 1) * FONT_HEIGHT,
-                          s->width * FONT_WIDTH, FONT_HEIGHT, 
+                          s->width * FONT_WIDTH, FONT_HEIGHT,
                           color_table[0][s->t_attrib_default.bgcol]);
-            dpy_update(s->ds, 0, 0, 
-                       s->width * FONT_WIDTH, s->height * FONT_HEIGHT);
+            s->update_x0 = 0;
+            s->update_y0 = 0;
+            s->update_x1 = s->width * FONT_WIDTH;
+            s->update_y1 = s->height * FONT_HEIGHT;
         }
     }
 }
@@ -755,7 +836,6 @@ static void console_clear_xy(TextConsole *s, int x, int y)
     TextCell *c = &s->cells[y1 * s->width + x];
     c->ch = ' ';
     c->t_attrib = s->t_attrib_default;
-    c++;
     update_xy(s, x, y);
 }
 
@@ -775,7 +855,7 @@ static void console_putchar(TextConsole *s, int ch)
             console_put_lf(s);
             break;
         case '\b':  /* backspace */
-            if (s->x > 0) 
+            if (s->x > 0)
                 s->x--;
             break;
         case '\t':  /* tabspace */
@@ -826,7 +906,7 @@ static void console_putchar(TextConsole *s, int ch)
     case TTY_STATE_CSI: /* handle escape sequence parameters */
         if (ch >= '0' && ch <= '9') {
             if (s->nb_esc_params < MAX_ESC_PARAMS) {
-                s->esc_params[s->nb_esc_params] = 
+                s->esc_params[s->nb_esc_params] =
                     s->esc_params[s->nb_esc_params] * 10 + ch - '0';
             }
         } else {
@@ -987,20 +1067,22 @@ void console_select(unsigned int index)
 
     if (index >= MAX_CONSOLES)
         return;
+    if (active_console) {
+        active_console->g_width = ds_get_width(active_console->ds);
+        active_console->g_height = ds_get_height(active_console->ds);
+    }
     s = consoles[index];
     if (s) {
+        DisplayState *ds = s->ds;
         active_console = s;
-        if (s->text_console) {
-            if (s->g_width != s->ds->width ||
-                s->g_height != s->ds->height) {
-                s->g_width = s->ds->width;
-                s->g_height = s->ds->height;
-                text_console_resize(s);
-            }
-            console_refresh(s);
+        if (ds_get_bits_per_pixel(s->ds)) {
+            ds->surface = qemu_resize_displaysurface(ds, s->g_width, s->g_height);
         } else {
-            vga_hw_invalidate();
+            s->ds->surface->width = s->width;
+            s->ds->surface->height = s->height;
         }
+        dpy_resize(s->ds);
+        vga_hw_invalidate();
     }
 }
 
@@ -1009,27 +1091,21 @@ static int console_puts(CharDriverState *chr, const uint8_t *buf, int len)
     TextConsole *s = chr->opaque;
     int i;
 
+    s->update_x0 = s->width * FONT_WIDTH;
+    s->update_y0 = s->height * FONT_HEIGHT;
+    s->update_x1 = 0;
+    s->update_y1 = 0;
     console_show_cursor(s, 0);
     for(i = 0; i < len; i++) {
         console_putchar(s, buf[i]);
     }
     console_show_cursor(s, 1);
-    return len;
-}
-
-static void console_send_event(CharDriverState *chr, int event)
-{
-    TextConsole *s = chr->opaque;
-    int i;
-
-    if (event == CHR_EVENT_FOCUS) {
-        for(i = 0; i < nb_consoles; i++) {
-            if (consoles[i] == s) {
-                console_select(i);
-                break;
-            }
-        }
+    if (ds_get_bits_per_pixel(s->ds) && s->update_x0 < s->update_x1) {
+        dpy_update(s->ds, s->update_x0, s->update_y0,
+                   s->update_x1 - s->update_x0,
+                   s->update_y1 - s->update_y0);
     }
+    return len;
 }
 
 static void kbd_send_chars(void *opaque)
@@ -1037,20 +1113,20 @@ static void kbd_send_chars(void *opaque)
     TextConsole *s = opaque;
     int len;
     uint8_t buf[16];
-    
-    len = qemu_chr_can_read(s->chr);
+
+    len = qemu_chr_be_can_write(s->chr);
     if (len > s->out_fifo.count)
         len = s->out_fifo.count;
     if (len > 0) {
         if (len > sizeof(buf))
             len = sizeof(buf);
         qemu_fifo_read(&s->out_fifo, buf, len);
-        qemu_chr_read(s->chr, buf, len);
+        qemu_chr_be_write(s->chr, buf, len);
     }
     /* characters are pending: we send them a bit later (XXX:
        horrible, should change char device API) */
     if (s->out_fifo.count > 0) {
-        qemu_mod_timer(s->kbd_timer, qemu_get_clock(rt_clock) + 1);
+        qemu_mod_timer(s->kbd_timer, qemu_get_clock_ms(rt_clock) + 1);
     }
 }
 
@@ -1062,7 +1138,7 @@ void kbd_put_keysym(int keysym)
     int c;
 
     s = active_console;
-    if (!s || !s->text_console)
+    if (!s || (s->console_type == GRAPHIC_CONSOLE))
         return;
 
     switch(keysym) {
@@ -1093,8 +1169,14 @@ void kbd_put_keysym(int keysym)
             *q++ = '\033';
             *q++ = '[';
             *q++ = keysym & 0xff;
+        } else if (s->echo && (keysym == '\r' || keysym == '\n')) {
+            console_puts(s->chr, (const uint8_t *) "\r", 1);
+            *q++ = '\n';
         } else {
-                *q++ = keysym;
+            *q++ = keysym;
+        }
+        if (s->echo) {
+            console_puts(s->chr, buf, q - buf);
         }
         if (s->chr->chr_read) {
             qemu_fifo_write(&s->out_fifo, buf, q - buf);
@@ -1104,97 +1186,299 @@ void kbd_put_keysym(int keysym)
     }
 }
 
-static TextConsole *new_console(DisplayState *ds, int text)
+static void text_console_invalidate(void *opaque)
+{
+    TextConsole *s = (TextConsole *) opaque;
+    if (!ds_get_bits_per_pixel(s->ds) && s->console_type == TEXT_CONSOLE) {
+        s->g_width = ds_get_width(s->ds);
+        s->g_height = ds_get_height(s->ds);
+        text_console_resize(s);
+    }
+    console_refresh(s);
+}
+
+static void text_console_update(void *opaque, console_ch_t *chardata)
+{
+    TextConsole *s = (TextConsole *) opaque;
+    int i, j, src;
+
+    if (s->text_x[0] <= s->text_x[1]) {
+        src = (s->y_base + s->text_y[0]) * s->width;
+        chardata += s->text_y[0] * s->width;
+        for (i = s->text_y[0]; i <= s->text_y[1]; i ++)
+            for (j = 0; j < s->width; j ++, src ++)
+                console_write_ch(chardata ++, s->cells[src].ch |
+                                (s->cells[src].t_attrib.fgcol << 12) |
+                                (s->cells[src].t_attrib.bgcol << 8) |
+                                (s->cells[src].t_attrib.bold << 21));
+        dpy_update(s->ds, s->text_x[0], s->text_y[0],
+                   s->text_x[1] - s->text_x[0], i - s->text_y[0]);
+        s->text_x[0] = s->width;
+        s->text_y[0] = s->height;
+        s->text_x[1] = 0;
+        s->text_y[1] = 0;
+    }
+    if (s->cursor_invalidate) {
+        dpy_cursor(s->ds, s->x, s->y);
+        s->cursor_invalidate = 0;
+    }
+}
+
+static TextConsole *get_graphic_console(DisplayState *ds)
+{
+    int i;
+    TextConsole *s;
+    for (i = 0; i < nb_consoles; i++) {
+        s = consoles[i];
+        if (s->console_type == GRAPHIC_CONSOLE && s->ds == ds)
+            return s;
+    }
+    return NULL;
+}
+
+static TextConsole *new_console(DisplayState *ds, console_type_t console_type)
 {
     TextConsole *s;
     int i;
 
     if (nb_consoles >= MAX_CONSOLES)
         return NULL;
-    s = qemu_mallocz(sizeof(TextConsole));
-    if (!s) {
-        return NULL;
-    }
-    if (!active_console || (active_console->text_console && !text))
+    s = g_malloc0(sizeof(TextConsole));
+    if (!active_console || ((active_console->console_type != GRAPHIC_CONSOLE) &&
+        (console_type == GRAPHIC_CONSOLE))) {
         active_console = s;
+    }
     s->ds = ds;
-    s->text_console = text;
-    if (text) {
+    s->console_type = console_type;
+    if (console_type != GRAPHIC_CONSOLE) {
+        s->index = nb_consoles;
         consoles[nb_consoles++] = s;
     } else {
         /* HACK: Put graphical consoles before text consoles.  */
         for (i = nb_consoles; i > 0; i--) {
-            if (!consoles[i - 1]->text_console)
+            if (consoles[i - 1]->console_type == GRAPHIC_CONSOLE)
                 break;
             consoles[i] = consoles[i - 1];
+            consoles[i]->index = i;
         }
+        s->index = i;
         consoles[i] = s;
+        nb_consoles++;
     }
     return s;
 }
 
-TextConsole *graphic_console_init(DisplayState *ds, vga_hw_update_ptr update,
-                                  vga_hw_invalidate_ptr invalidate,
-                                  vga_hw_screen_dump_ptr screen_dump,
-                                  void *opaque)
+static DisplaySurface* defaultallocator_create_displaysurface(int width, int height)
+{
+    DisplaySurface *surface = (DisplaySurface*) g_malloc0(sizeof(DisplaySurface));
+
+    int linesize = width * 4;
+    qemu_alloc_display(surface, width, height, linesize,
+                       qemu_default_pixelformat(32), 0);
+    return surface;
+}
+
+static DisplaySurface* defaultallocator_resize_displaysurface(DisplaySurface *surface,
+                                          int width, int height)
+{
+    int linesize = width * 4;
+    qemu_alloc_display(surface, width, height, linesize,
+                       qemu_default_pixelformat(32), 0);
+    return surface;
+}
+
+void qemu_alloc_display(DisplaySurface *surface, int width, int height,
+                        int linesize, PixelFormat pf, int newflags)
+{
+    void *data;
+    surface->width = width;
+    surface->height = height;
+    surface->linesize = linesize;
+    surface->pf = pf;
+    if (surface->flags & QEMU_ALLOCATED_FLAG) {
+        data = g_realloc(surface->data,
+                            surface->linesize * surface->height);
+    } else {
+        data = g_malloc(surface->linesize * surface->height);
+    }
+    surface->data = (uint8_t *)data;
+    surface->flags = newflags | QEMU_ALLOCATED_FLAG;
+#ifdef HOST_WORDS_BIGENDIAN
+    surface->flags |= QEMU_BIG_ENDIAN_FLAG;
+#endif
+}
+
+DisplaySurface* qemu_create_displaysurface_from(int width, int height, int bpp,
+                                              int linesize, uint8_t *data)
+{
+    DisplaySurface *surface = (DisplaySurface*) g_malloc0(sizeof(DisplaySurface));
+
+    surface->width = width;
+    surface->height = height;
+    surface->linesize = linesize;
+    surface->pf = qemu_default_pixelformat(bpp);
+#ifdef HOST_WORDS_BIGENDIAN
+    surface->flags = QEMU_BIG_ENDIAN_FLAG;
+#endif
+    surface->data = data;
+
+    return surface;
+}
+
+static void defaultallocator_free_displaysurface(DisplaySurface *surface)
+{
+    if (surface == NULL)
+        return;
+    if (surface->flags & QEMU_ALLOCATED_FLAG)
+        g_free(surface->data);
+    g_free(surface);
+}
+
+static struct DisplayAllocator default_allocator = {
+    defaultallocator_create_displaysurface,
+    defaultallocator_resize_displaysurface,
+    defaultallocator_free_displaysurface
+};
+
+static void dumb_display_init(void)
+{
+    DisplayState *ds = g_malloc0(sizeof(DisplayState));
+    int width = 640;
+    int height = 480;
+
+    ds->allocator = &default_allocator;
+    if (is_fixedsize_console()) {
+        width = active_console->g_width;
+        height = active_console->g_height;
+    }
+    ds->surface = qemu_create_displaysurface(ds, width, height);
+    register_displaystate(ds);
+}
+
+/***********************************************************/
+/* register display */
+
+void register_displaystate(DisplayState *ds)
+{
+    DisplayState **s;
+    s = &display_state;
+    while (*s != NULL)
+        s = &(*s)->next;
+    ds->next = NULL;
+    *s = ds;
+}
+
+DisplayState *get_displaystate(void)
+{
+    if (!display_state) {
+        dumb_display_init ();
+    }
+    return display_state;
+}
+
+DisplayAllocator *register_displayallocator(DisplayState *ds, DisplayAllocator *da)
+{
+    if(ds->allocator ==  &default_allocator) {
+        DisplaySurface *surf;
+        surf = da->create_displaysurface(ds_get_width(ds), ds_get_height(ds));
+        defaultallocator_free_displaysurface(ds->surface);
+        ds->surface = surf;
+        ds->allocator = da;
+    }
+    return ds->allocator;
+}
+
+DisplayState *graphic_console_init(vga_hw_update_ptr update,
+                                   vga_hw_invalidate_ptr invalidate,
+                                   vga_hw_screen_dump_ptr screen_dump,
+                                   vga_hw_text_update_ptr text_update,
+                                   void *opaque)
 {
     TextConsole *s;
+    DisplayState *ds;
 
-    s = new_console(ds, 0);
-    if (!s)
-      return NULL;
+    ds = (DisplayState *) g_malloc0(sizeof(DisplayState));
+    ds->allocator = &default_allocator; 
+    ds->surface = qemu_create_displaysurface(ds, 640, 480);
+
+    s = new_console(ds, GRAPHIC_CONSOLE);
+    if (s == NULL) {
+        qemu_free_displaysurface(ds);
+        g_free(ds);
+        return NULL;
+    }
     s->hw_update = update;
     s->hw_invalidate = invalidate;
     s->hw_screen_dump = screen_dump;
+    s->hw_text_update = text_update;
     s->hw = opaque;
-    return s;
+
+    register_displaystate(ds);
+    return ds;
 }
 
 int is_graphic_console(void)
 {
-    return !active_console->text_console;
+    return active_console && active_console->console_type == GRAPHIC_CONSOLE;
 }
 
-CharDriverState *text_console_init(DisplayState *ds)
+int is_fixedsize_console(void)
 {
-    CharDriverState *chr;
+    return active_console && active_console->console_type != TEXT_CONSOLE;
+}
+
+void console_color_init(DisplayState *ds)
+{
+    int i, j;
+    for (j = 0; j < 2; j++) {
+        for (i = 0; i < 8; i++) {
+            color_table[j][i] = col_expand(ds,
+                   vga_get_color(ds, color_table_rgb[j][i]));
+        }
+    }
+}
+
+static int n_text_consoles;
+static CharDriverState *text_consoles[128];
+
+static void text_console_set_echo(CharDriverState *chr, bool echo)
+{
+    TextConsole *s = chr->opaque;
+
+    s->echo = echo;
+}
+
+static void text_console_do_init(CharDriverState *chr, DisplayState *ds)
+{
     TextConsole *s;
-    int i,j;
     static int color_inited;
 
-    chr = qemu_mallocz(sizeof(CharDriverState));
-    if (!chr)
-        return NULL;
-    s = new_console(ds, 1);
-    if (!s) {
-        free(chr);
-        return NULL;
-    }
-    chr->opaque = s;
-    chr->chr_write = console_puts;
-    chr->chr_send_event = console_send_event;
+    s = chr->opaque;
 
-    s->chr = chr;
+    chr->chr_write = console_puts;
+
     s->out_fifo.buf = s->out_fifo_buf;
     s->out_fifo.buf_size = sizeof(s->out_fifo_buf);
-    s->kbd_timer = qemu_new_timer(rt_clock, kbd_send_chars, s);
-    
+    s->kbd_timer = qemu_new_timer_ms(rt_clock, kbd_send_chars, s);
+    s->ds = ds;
+
     if (!color_inited) {
         color_inited = 1;
-        for(j = 0; j < 2; j++) {
-            for(i = 0; i < 8; i++) {
-                color_table[j][i] = col_expand(s->ds, 
-                        vga_get_color(s->ds, color_table_rgb[j][i]));
-            }
-        }
+        console_color_init(s->ds);
     }
     s->y_displayed = 0;
     s->y_base = 0;
     s->total_height = DEFAULT_BACKSCROLL;
     s->x = 0;
     s->y = 0;
-    s->g_width = s->ds->width;
-    s->g_height = s->ds->height;
+    if (s->console_type == TEXT_CONSOLE) {
+        s->g_width = ds_get_width(s->ds);
+        s->g_height = ds_get_height(s->ds);
+    }
+
+    s->hw_invalidate = text_console_invalidate;
+    s->hw_text_update = text_console_update;
+    s->hw = s;
 
     /* Set text attribute defaults */
     s->t_attrib_default.bold = 0;
@@ -1204,12 +1488,224 @@ CharDriverState *text_console_init(DisplayState *ds)
     s->t_attrib_default.unvisible = 0;
     s->t_attrib_default.fgcol = COLOR_WHITE;
     s->t_attrib_default.bgcol = COLOR_BLACK;
-
     /* set current text attributes to default */
     s->t_attrib = s->t_attrib_default;
     text_console_resize(s);
 
-    qemu_chr_reset(chr);
+    if (chr->label) {
+        char msg[128];
+        int len;
 
-    return chr;
+        s->t_attrib.bgcol = COLOR_BLUE;
+        len = snprintf(msg, sizeof(msg), "%s console\r\n", chr->label);
+        console_puts(chr, (uint8_t*)msg, len);
+        s->t_attrib = s->t_attrib_default;
+    }
+
+    qemu_chr_generic_open(chr);
+    if (chr->init)
+        chr->init(chr);
+}
+
+int text_console_init(QemuOpts *opts, CharDriverState **_chr)
+{
+    CharDriverState *chr;
+    TextConsole *s;
+    unsigned width;
+    unsigned height;
+
+    chr = g_malloc0(sizeof(CharDriverState));
+
+    if (n_text_consoles == 128) {
+        fprintf(stderr, "Too many text consoles\n");
+        exit(1);
+    }
+    text_consoles[n_text_consoles] = chr;
+    n_text_consoles++;
+
+    width = qemu_opt_get_number(opts, "width", 0);
+    if (width == 0)
+        width = qemu_opt_get_number(opts, "cols", 0) * FONT_WIDTH;
+
+    height = qemu_opt_get_number(opts, "height", 0);
+    if (height == 0)
+        height = qemu_opt_get_number(opts, "rows", 0) * FONT_HEIGHT;
+
+    if (width == 0 || height == 0) {
+        s = new_console(NULL, TEXT_CONSOLE);
+    } else {
+        s = new_console(NULL, TEXT_CONSOLE_FIXED_SIZE);
+    }
+
+    if (!s) {
+        g_free(chr);
+        return -EBUSY;
+    }
+
+    s->chr = chr;
+    s->g_width = width;
+    s->g_height = height;
+    chr->opaque = s;
+    chr->chr_set_echo = text_console_set_echo;
+
+    *_chr = chr;
+    return 0;
+}
+
+void text_consoles_set_display(DisplayState *ds)
+{
+    int i;
+
+    for (i = 0; i < n_text_consoles; i++) {
+        text_console_do_init(text_consoles[i], ds);
+    }
+
+    n_text_consoles = 0;
+}
+
+void qemu_console_resize(DisplayState *ds, int width, int height)
+{
+    TextConsole *s = get_graphic_console(ds);
+    if (!s) return;
+
+    s->g_width = width;
+    s->g_height = height;
+    if (is_graphic_console()) {
+        ds->surface = qemu_resize_displaysurface(ds, width, height);
+        dpy_resize(ds);
+    }
+}
+
+void qemu_console_copy(DisplayState *ds, int src_x, int src_y,
+                       int dst_x, int dst_y, int w, int h)
+{
+    if (is_graphic_console()) {
+        dpy_copy(ds, src_x, src_y, dst_x, dst_y, w, h);
+    }
+}
+
+PixelFormat qemu_different_endianness_pixelformat(int bpp)
+{
+    PixelFormat pf;
+
+    memset(&pf, 0x00, sizeof(PixelFormat));
+
+    pf.bits_per_pixel = bpp;
+    pf.bytes_per_pixel = bpp / 8;
+    pf.depth = bpp == 32 ? 24 : bpp;
+
+    switch (bpp) {
+        case 24:
+            pf.rmask = 0x000000FF;
+            pf.gmask = 0x0000FF00;
+            pf.bmask = 0x00FF0000;
+            pf.rmax = 255;
+            pf.gmax = 255;
+            pf.bmax = 255;
+            pf.rshift = 0;
+            pf.gshift = 8;
+            pf.bshift = 16;
+            pf.rbits = 8;
+            pf.gbits = 8;
+            pf.bbits = 8;
+            break;
+        case 32:
+            pf.rmask = 0x0000FF00;
+            pf.gmask = 0x00FF0000;
+            pf.bmask = 0xFF000000;
+            pf.amask = 0x00000000;
+            pf.amax = 255;
+            pf.rmax = 255;
+            pf.gmax = 255;
+            pf.bmax = 255;
+            pf.ashift = 0;
+            pf.rshift = 8;
+            pf.gshift = 16;
+            pf.bshift = 24;
+            pf.rbits = 8;
+            pf.gbits = 8;
+            pf.bbits = 8;
+            pf.abits = 8;
+            break;
+        default:
+            break;
+    }
+    return pf;
+}
+
+PixelFormat qemu_default_pixelformat(int bpp)
+{
+    PixelFormat pf;
+
+    memset(&pf, 0x00, sizeof(PixelFormat));
+
+    pf.bits_per_pixel = bpp;
+    pf.bytes_per_pixel = bpp / 8;
+    pf.depth = bpp == 32 ? 24 : bpp;
+
+    switch (bpp) {
+        case 15:
+            pf.bits_per_pixel = 16;
+            pf.bytes_per_pixel = 2;
+            pf.rmask = 0x00007c00;
+            pf.gmask = 0x000003E0;
+            pf.bmask = 0x0000001F;
+            pf.rmax = 31;
+            pf.gmax = 31;
+            pf.bmax = 31;
+            pf.rshift = 10;
+            pf.gshift = 5;
+            pf.bshift = 0;
+            pf.rbits = 5;
+            pf.gbits = 5;
+            pf.bbits = 5;
+            break;
+        case 16:
+            pf.rmask = 0x0000F800;
+            pf.gmask = 0x000007E0;
+            pf.bmask = 0x0000001F;
+            pf.rmax = 31;
+            pf.gmax = 63;
+            pf.bmax = 31;
+            pf.rshift = 11;
+            pf.gshift = 5;
+            pf.bshift = 0;
+            pf.rbits = 5;
+            pf.gbits = 6;
+            pf.bbits = 5;
+            break;
+        case 24:
+            pf.rmask = 0x00FF0000;
+            pf.gmask = 0x0000FF00;
+            pf.bmask = 0x000000FF;
+            pf.rmax = 255;
+            pf.gmax = 255;
+            pf.bmax = 255;
+            pf.rshift = 16;
+            pf.gshift = 8;
+            pf.bshift = 0;
+            pf.rbits = 8;
+            pf.gbits = 8;
+            pf.bbits = 8;
+        case 32:
+            pf.rmask = 0x00FF0000;
+            pf.gmask = 0x0000FF00;
+            pf.bmask = 0x000000FF;
+            pf.amax = 255;
+            pf.rmax = 255;
+            pf.gmax = 255;
+            pf.bmax = 255;
+            pf.ashift = 24;
+            pf.rshift = 16;
+            pf.gshift = 8;
+            pf.bshift = 0;
+            pf.rbits = 8;
+            pf.gbits = 8;
+            pf.bbits = 8;
+            pf.abits = 8;
+            break;
+        default:
+            break;
+    }
+    return pf;
 }

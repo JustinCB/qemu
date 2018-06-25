@@ -1,24 +1,14 @@
-/* 
+/*
  * Generic ARM Programmable Interrupt Controller support.
  *
  * Copyright (c) 2006 CodeSourcery.
  * Written by Paul Brook
  *
- * This code is licenced under the LGPL
+ * This code is licensed under the LGPL
  */
 
-#include "vl.h"
-#include "arm_pic.h"
-
-/* Stub functions for hardware that doesn't exist.  */
-void pic_info(void)
-{
-}
-
-void irq_info(void)
-{
-}
-
+#include "hw.h"
+#include "arm-misc.h"
 
 /* Input 0 is IRQ and input 1 is FIQ.  */
 static void arm_pic_cpu_handler(void *opaque, int irq, int level)
@@ -38,7 +28,7 @@ static void arm_pic_cpu_handler(void *opaque, int irq, int level)
             cpu_reset_interrupt(env, CPU_INTERRUPT_FIQ);
         break;
     default:
-        cpu_abort(env, "arm_pic_cpu_handler: Bad interrput line %d\n", irq);
+        hw_error("arm_pic_cpu_handler: Bad interrupt line %d\n", irq);
     }
 }
 

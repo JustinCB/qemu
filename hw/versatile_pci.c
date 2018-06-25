@@ -1,142 +1,130 @@
-/* 
+/*
  * ARM Versatile/PB PCI host controller
  *
- * Copyright (c) 2006 CodeSourcery.
+ * Copyright (c) 2006-2009 CodeSourcery.
  * Written by Paul Brook
  *
- * This code is licenced under the LGPL.
+ * This code is licensed under the LGPL.
  */
 
-#include "vl.h"
+#include "sysbus.h"
+#include "pci.h"
+#include "pci_host.h"
+#include "exec-memory.h"
+
+typedef struct {
+    SysBusDevice busdev;
+    qemu_irq irq[4];
+    int realview;
+    MemoryRegion mem_config;
+    MemoryRegion mem_config2;
+    MemoryRegion isa;
+} PCIVPBState;
 
 static inline uint32_t vpb_pci_config_addr(target_phys_addr_t addr)
 {
     return addr & 0xffffff;
 }
 
-static void pci_vpb_config_writeb (void *opaque, target_phys_addr_t addr,
-                                   uint32_t val)
+static void pci_vpb_config_write(void *opaque, target_phys_addr_t addr,
+                                 uint64_t val, unsigned size)
 {
-    pci_data_write(opaque, vpb_pci_config_addr (addr), val, 1);
+    pci_data_write(opaque, vpb_pci_config_addr(addr), val, size);
 }
 
-static void pci_vpb_config_writew (void *opaque, target_phys_addr_t addr,
-                                   uint32_t val)
-{
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap16(val);
-#endif
-    pci_data_write(opaque, vpb_pci_config_addr (addr), val, 2);
-}
-
-static void pci_vpb_config_writel (void *opaque, target_phys_addr_t addr,
-                                   uint32_t val)
-{
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap32(val);
-#endif
-    pci_data_write(opaque, vpb_pci_config_addr (addr), val, 4);
-}
-
-static uint32_t pci_vpb_config_readb (void *opaque, target_phys_addr_t addr)
+static uint64_t pci_vpb_config_read(void *opaque, target_phys_addr_t addr,
+                                    unsigned size)
 {
     uint32_t val;
-    val = pci_data_read(opaque, vpb_pci_config_addr (addr), 1);
+    val = pci_data_read(opaque, vpb_pci_config_addr(addr), size);
     return val;
 }
 
-static uint32_t pci_vpb_config_readw (void *opaque, target_phys_addr_t addr)
-{
-    uint32_t val;
-    val = pci_data_read(opaque, vpb_pci_config_addr (addr), 2);
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap16(val);
-#endif
-    return val;
-}
-
-static uint32_t pci_vpb_config_readl (void *opaque, target_phys_addr_t addr)
-{
-    uint32_t val;
-    val = pci_data_read(opaque, vpb_pci_config_addr (addr), 4);
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap32(val);
-#endif
-    return val;
-}
-
-static CPUWriteMemoryFunc *pci_vpb_config_write[] = {
-    &pci_vpb_config_writeb,
-    &pci_vpb_config_writew,
-    &pci_vpb_config_writel,
+static const MemoryRegionOps pci_vpb_config_ops = {
+    .read = pci_vpb_config_read,
+    .write = pci_vpb_config_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
 };
-
-static CPUReadMemoryFunc *pci_vpb_config_read[] = {
-    &pci_vpb_config_readb,
-    &pci_vpb_config_readw,
-    &pci_vpb_config_readl,
-};
-
-static int pci_vpb_irq;
 
 static int pci_vpb_map_irq(PCIDevice *d, int irq_num)
 {
     return irq_num;
 }
 
-static void pci_vpb_set_irq(qemu_irq *pic, int irq_num, int level)
+static void pci_vpb_set_irq(void *opaque, int irq_num, int level)
 {
-    qemu_set_irq(pic[pci_vpb_irq + irq_num], level);
+    qemu_irq *pic = opaque;
+
+    qemu_set_irq(pic[irq_num], level);
 }
 
-PCIBus *pci_vpb_init(qemu_irq *pic, int irq, int realview)
+static int pci_vpb_init(SysBusDevice *dev)
 {
-    PCIBus *s;
-    PCIDevice *d;
-    int mem_config;
-    uint32_t base;
-    const char * name;
+    PCIVPBState *s = FROM_SYSBUS(PCIVPBState, dev);
+    PCIBus *bus;
+    int i;
 
-    pci_vpb_irq = irq;
-    if (realview) {
-        base = 0x60000000;
-        name = "RealView EB PCI Controller";
-    } else {
-        base = 0x40000000;
-        name = "Versatile/PB PCI Controller";
+    for (i = 0; i < 4; i++) {
+        sysbus_init_irq(dev, &s->irq[i]);
     }
-    s = pci_register_bus(pci_vpb_set_irq, pci_vpb_map_irq, pic, 11 << 3, 4);
+    bus = pci_register_bus(&dev->qdev, "pci",
+                           pci_vpb_set_irq, pci_vpb_map_irq, s->irq,
+                           get_system_memory(), get_system_io(),
+                           PCI_DEVFN(11, 0), 4);
+
     /* ??? Register memory space.  */
 
-    mem_config = cpu_register_io_memory(0, pci_vpb_config_read,
-                                        pci_vpb_config_write, s);
-    /* Selfconfig area.  */
-    cpu_register_physical_memory(base + 0x01000000, 0x1000000, mem_config);
-    /* Normal config area.  */
-    cpu_register_physical_memory(base + 0x02000000, 0x1000000, mem_config);
-
-    d = pci_register_device(s, name, sizeof(PCIDevice), -1, NULL, NULL);
-
-    if (realview) {
-        /* IO memory area.  */
-        isa_mmio_init(base + 0x03000000, 0x00100000);
+    /* Our memory regions are:
+     * 0 : PCI self config window
+     * 1 : PCI config window
+     * 2 : PCI IO window (realview_pci only)
+     */
+    memory_region_init_io(&s->mem_config, &pci_vpb_config_ops, bus,
+                          "pci-vpb-selfconfig", 0x1000000);
+    sysbus_init_mmio_region(dev, &s->mem_config);
+    memory_region_init_io(&s->mem_config2, &pci_vpb_config_ops, bus,
+                          "pci-vpb-config", 0x1000000);
+    sysbus_init_mmio_region(dev, &s->mem_config2);
+    if (s->realview) {
+        isa_mmio_setup(&s->isa, 0x0100000);
+        sysbus_init_mmio_region(dev, &s->isa);
     }
 
-    d->config[0x00] = 0xee; // vendor_id
-    d->config[0x01] = 0x10;
-    /* Both boards have the same device ID.  Oh well.  */
-    d->config[0x02] = 0x00; // device_id
-    d->config[0x03] = 0x03;
-    d->config[0x04] = 0x00;
-    d->config[0x05] = 0x00;
-    d->config[0x06] = 0x20;
-    d->config[0x07] = 0x02;
-    d->config[0x08] = 0x00; // revision
-    d->config[0x09] = 0x00; // programming i/f
-    d->config[0x0A] = 0x40; // class_sub = pci host
-    d->config[0x0B] = 0x0b; // class_base = PCI_bridge
-    d->config[0x0D] = 0x10; // latency_timer
-
-    return s;
+    pci_create_simple(bus, -1, "versatile_pci_host");
+    return 0;
 }
 
+static int pci_realview_init(SysBusDevice *dev)
+{
+    PCIVPBState *s = FROM_SYSBUS(PCIVPBState, dev);
+    s->realview = 1;
+    return pci_vpb_init(dev);
+}
+
+static int versatile_pci_host_init(PCIDevice *d)
+{
+    pci_set_word(d->config + PCI_STATUS,
+		 PCI_STATUS_66MHZ | PCI_STATUS_DEVSEL_MEDIUM);
+    pci_set_byte(d->config + PCI_LATENCY_TIMER, 0x10);
+    return 0;
+}
+
+static PCIDeviceInfo versatile_pci_host_info = {
+    .qdev.name = "versatile_pci_host",
+    .qdev.size = sizeof(PCIDevice),
+    .init      = versatile_pci_host_init,
+    .vendor_id = PCI_VENDOR_ID_XILINX,
+    /* Both boards have the same device ID.  Oh well.  */
+    .device_id = PCI_DEVICE_ID_XILINX_XC2VP30,
+    .class_id  = PCI_CLASS_PROCESSOR_CO,
+};
+
+static void versatile_pci_register_devices(void)
+{
+    sysbus_register_dev("versatile_pci", sizeof(PCIVPBState), pci_vpb_init);
+    sysbus_register_dev("realview_pci", sizeof(PCIVPBState),
+                        pci_realview_init);
+    pci_qdev_register(&versatile_pci_host_info);
+}
+
+device_init(versatile_pci_register_devices)

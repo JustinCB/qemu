@@ -175,7 +175,7 @@ static inline int array_roll(array_t* array,int index_to,int index_from,int coun
     return 0;
 }
 
-inline int array_remove_slice(array_t* array,int index, int count)
+/*inline*/ int array_remove_slice(array_t* array,int index, int count)
 {
     assert(index >=0);
     assert(count > 0);

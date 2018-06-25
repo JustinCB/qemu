@@ -5,10 +5,12 @@
  * Copyright (c) 2006 Thorsten Zitterell
  * Written by Andrzej Zaborowski <balrog@zabor.org>
  *
- * This code is licenced under the GPL.
+ * This code is licensed under the GPL.
  */
 
-#include "vl.h"
+#include "hw.h"
+#include "pxa.h"
+#include "sysbus.h"
 
 #define ICIP	0x00	/* Interrupt Controller IRQ Pending register */
 #define ICMR	0x04	/* Interrupt Controller Mask register */
@@ -29,20 +31,20 @@
 
 #define PXA2XX_PIC_SRCS	40
 
-struct pxa2xx_pic_state_s {
-    target_phys_addr_t base;
+typedef struct {
+    SysBusDevice busdev;
     CPUState *cpu_env;
     uint32_t int_enabled[2];
     uint32_t int_pending[2];
     uint32_t is_fiq[2];
     uint32_t int_idle;
     uint32_t priority[PXA2XX_PIC_SRCS];
-};
+} PXA2xxPICState;
 
 static void pxa2xx_pic_update(void *opaque)
 {
     uint32_t mask[2];
-    struct pxa2xx_pic_state_s *s = (struct pxa2xx_pic_state_s *) opaque;
+    PXA2xxPICState *s = (PXA2xxPICState *) opaque;
 
     if (s->cpu_env->halted) {
         mask[0] = s->int_pending[0] & (s->int_enabled[0] | s->int_idle);
@@ -69,7 +71,7 @@ static void pxa2xx_pic_update(void *opaque)
  * IRQ/FIQ distinction as in PXA Developer Manual.  */
 static void pxa2xx_pic_set_irq(void *opaque, int irq, int level)
 {
-    struct pxa2xx_pic_state_s *s = (struct pxa2xx_pic_state_s *) opaque;
+    PXA2xxPICState *s = (PXA2xxPICState *) opaque;
     int int_set = (irq >= 32);
     irq &= 31;
 
@@ -81,7 +83,7 @@ static void pxa2xx_pic_set_irq(void *opaque, int irq, int level)
     pxa2xx_pic_update(opaque);
 }
 
-static inline uint32_t pxa2xx_pic_highest(struct pxa2xx_pic_state_s *s) {
+static inline uint32_t pxa2xx_pic_highest(PXA2xxPICState *s) {
     int i, int_set, irq;
     uint32_t bit, mask[2];
     uint32_t ichp = 0x003f003f;	/* Both IDs invalid */
@@ -115,8 +117,7 @@ static inline uint32_t pxa2xx_pic_highest(struct pxa2xx_pic_state_s *s) {
 
 static uint32_t pxa2xx_pic_mem_read(void *opaque, target_phys_addr_t offset)
 {
-    struct pxa2xx_pic_state_s *s = (struct pxa2xx_pic_state_s *) opaque;
-    offset -= s->base;
+    PXA2xxPICState *s = (PXA2xxPICState *) opaque;
 
     switch (offset) {
     case ICIP:	/* IRQ Pending register */
@@ -156,8 +157,7 @@ static uint32_t pxa2xx_pic_mem_read(void *opaque, target_phys_addr_t offset)
 static void pxa2xx_pic_mem_write(void *opaque, target_phys_addr_t offset,
                 uint32_t value)
 {
-    struct pxa2xx_pic_state_s *s = (struct pxa2xx_pic_state_s *) opaque;
-    offset -= s->base;
+    PXA2xxPICState *s = (PXA2xxPICState *) opaque;
 
     switch (offset) {
     case ICMR:	/* Mask register */
@@ -206,7 +206,6 @@ static const int pxa2xx_cp_reg_map[0x10] = {
 
 static uint32_t pxa2xx_pic_cp_read(void *opaque, int op2, int reg, int crm)
 {
-    struct pxa2xx_pic_state_s *s = (struct pxa2xx_pic_state_s *) opaque;
     target_phys_addr_t offset;
 
     if (pxa2xx_cp_reg_map[reg] == -1) {
@@ -214,14 +213,13 @@ static uint32_t pxa2xx_pic_cp_read(void *opaque, int op2, int reg, int crm)
         return 0;
     }
 
-    offset = s->base + pxa2xx_cp_reg_map[reg];
+    offset = pxa2xx_cp_reg_map[reg];
     return pxa2xx_pic_mem_read(opaque, offset);
 }
 
 static void pxa2xx_pic_cp_write(void *opaque, int op2, int reg, int crm,
                 uint32_t value)
 {
-    struct pxa2xx_pic_state_s *s = (struct pxa2xx_pic_state_s *) opaque;
     target_phys_addr_t offset;
 
     if (pxa2xx_cp_reg_map[reg] == -1) {
@@ -229,70 +227,35 @@ static void pxa2xx_pic_cp_write(void *opaque, int op2, int reg, int crm,
         return;
     }
 
-    offset = s->base + pxa2xx_cp_reg_map[reg];
+    offset = pxa2xx_cp_reg_map[reg];
     pxa2xx_pic_mem_write(opaque, offset, value);
 }
 
-static CPUReadMemoryFunc *pxa2xx_pic_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_pic_readfn[] = {
     pxa2xx_pic_mem_read,
     pxa2xx_pic_mem_read,
     pxa2xx_pic_mem_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_pic_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_pic_writefn[] = {
     pxa2xx_pic_mem_write,
     pxa2xx_pic_mem_write,
     pxa2xx_pic_mem_write,
 };
 
-static void pxa2xx_pic_save(QEMUFile *f, void *opaque)
+static int pxa2xx_pic_post_load(void *opaque, int version_id)
 {
-    struct pxa2xx_pic_state_s *s = (struct pxa2xx_pic_state_s *) opaque;
-    int i;
-
-    for (i = 0; i < 2; i ++)
-        qemu_put_be32s(f, &s->int_enabled[i]);
-    for (i = 0; i < 2; i ++)
-        qemu_put_be32s(f, &s->int_pending[i]);
-    for (i = 0; i < 2; i ++)
-        qemu_put_be32s(f, &s->is_fiq[i]);
-    qemu_put_be32s(f, &s->int_idle);
-    for (i = 0; i < PXA2XX_PIC_SRCS; i ++)
-        qemu_put_be32s(f, &s->priority[i]);
-}
-
-static int pxa2xx_pic_load(QEMUFile *f, void *opaque, int version_id)
-{
-    struct pxa2xx_pic_state_s *s = (struct pxa2xx_pic_state_s *) opaque;
-    int i;
-
-    for (i = 0; i < 2; i ++)
-        qemu_get_be32s(f, &s->int_enabled[i]);
-    for (i = 0; i < 2; i ++)
-        qemu_get_be32s(f, &s->int_pending[i]);
-    for (i = 0; i < 2; i ++)
-        qemu_get_be32s(f, &s->is_fiq[i]);
-    qemu_get_be32s(f, &s->int_idle);
-    for (i = 0; i < PXA2XX_PIC_SRCS; i ++)
-        qemu_get_be32s(f, &s->priority[i]);
-
     pxa2xx_pic_update(opaque);
     return 0;
 }
 
-qemu_irq *pxa2xx_pic_init(target_phys_addr_t base, CPUState *env)
+DeviceState *pxa2xx_pic_init(target_phys_addr_t base, CPUState *env)
 {
-    struct pxa2xx_pic_state_s *s;
+    DeviceState *dev = qdev_create(NULL, "pxa2xx_pic");
     int iomemtype;
-    qemu_irq *qi;
-
-    s = (struct pxa2xx_pic_state_s *)
-            qemu_mallocz(sizeof(struct pxa2xx_pic_state_s));
-    if (!s)
-        return NULL;
+    PXA2xxPICState *s = FROM_SYSBUS(PXA2xxPICState, sysbus_from_qdev(dev));
 
     s->cpu_env = env;
-    s->base = base;
 
     s->int_pending[0] = 0;
     s->int_pending[1] = 0;
@@ -301,17 +264,53 @@ qemu_irq *pxa2xx_pic_init(target_phys_addr_t base, CPUState *env)
     s->is_fiq[0] = 0;
     s->is_fiq[1] = 0;
 
-    qi = qemu_allocate_irqs(pxa2xx_pic_set_irq, s, PXA2XX_PIC_SRCS);
+    qdev_init_nofail(dev);
+
+    qdev_init_gpio_in(dev, pxa2xx_pic_set_irq, PXA2XX_PIC_SRCS);
 
     /* Enable IC memory-mapped registers access.  */
-    iomemtype = cpu_register_io_memory(0, pxa2xx_pic_readfn,
-                    pxa2xx_pic_writefn, s);
-    cpu_register_physical_memory(base, 0x00100000, iomemtype);
+    iomemtype = cpu_register_io_memory(pxa2xx_pic_readfn,
+                    pxa2xx_pic_writefn, s, DEVICE_NATIVE_ENDIAN);
+    sysbus_init_mmio(sysbus_from_qdev(dev), 0x00100000, iomemtype);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, base);
 
     /* Enable IC coprocessor access.  */
     cpu_arm_set_cp_io(env, 6, pxa2xx_pic_cp_read, pxa2xx_pic_cp_write, s);
 
-    register_savevm("pxa2xx_pic", 0, 0, pxa2xx_pic_save, pxa2xx_pic_load, s);
-
-    return qi;
+    return dev;
 }
+
+static VMStateDescription vmstate_pxa2xx_pic_regs = {
+    .name = "pxa2xx_pic",
+    .version_id = 0,
+    .minimum_version_id = 0,
+    .minimum_version_id_old = 0,
+    .post_load = pxa2xx_pic_post_load,
+    .fields = (VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(int_enabled, PXA2xxPICState, 2),
+        VMSTATE_UINT32_ARRAY(int_pending, PXA2xxPICState, 2),
+        VMSTATE_UINT32_ARRAY(is_fiq, PXA2xxPICState, 2),
+        VMSTATE_UINT32(int_idle, PXA2xxPICState),
+        VMSTATE_UINT32_ARRAY(priority, PXA2xxPICState, PXA2XX_PIC_SRCS),
+        VMSTATE_END_OF_LIST(),
+    },
+};
+
+static int pxa2xx_pic_initfn(SysBusDevice *dev)
+{
+    return 0;
+}
+
+static SysBusDeviceInfo pxa2xx_pic_info = {
+    .init       = pxa2xx_pic_initfn,
+    .qdev.name  = "pxa2xx_pic",
+    .qdev.desc  = "PXA2xx PIC",
+    .qdev.size  = sizeof(PXA2xxPICState),
+    .qdev.vmsd  = &vmstate_pxa2xx_pic_regs,
+};
+
+static void pxa2xx_pic_register(void)
+{
+    sysbus_register_withprop(&pxa2xx_pic_info);
+}
+device_init(pxa2xx_pic_register);

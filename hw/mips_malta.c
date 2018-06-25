@@ -22,29 +22,44 @@
  * THE SOFTWARE.
  */
 
-#include "vl.h"
+#include "hw.h"
+#include "pc.h"
+#include "fdc.h"
+#include "net.h"
+#include "boards.h"
+#include "smbus.h"
+#include "block.h"
+#include "flash.h"
+#include "mips.h"
+#include "mips_cpudevs.h"
+#include "pci.h"
+#include "usb-uhci.h"
+#include "vmware_vga.h"
+#include "qemu-char.h"
+#include "sysemu.h"
+#include "arch_init.h"
+#include "boards.h"
+#include "qemu-log.h"
+#include "mips-bios.h"
+#include "ide.h"
+#include "loader.h"
+#include "elf.h"
+#include "mc146818rtc.h"
+#include "blockdev.h"
+#include "exec-memory.h"
 
-#ifdef TARGET_WORDS_BIGENDIAN
-#define BIOS_FILENAME "mips_bios.bin"
-#else
-#define BIOS_FILENAME "mipsel_bios.bin"
-#endif
+//#define DEBUG_BOARD_INIT
 
-#ifdef TARGET_MIPS64
-#define PHYS_TO_VIRT(x) ((x) | ~0x7fffffffULL)
-#else
-#define PHYS_TO_VIRT(x) ((x) | ~0x7fffffffU)
-#endif
-
-#define ENVP_ADDR (int32_t)0x80002000
-#define VIRT_TO_PHYS_ADDEND (-((int64_t)(int32_t)0x80000000))
-
+#define ENVP_ADDR		0x80002000l
 #define ENVP_NB_ENTRIES	 	16
 #define ENVP_ENTRY_SIZE	 	256
 
-extern FILE *logfile;
+#define MAX_IDE_BUS 2
 
 typedef struct {
+    MemoryRegion iomem;
+    MemoryRegion iomem_lo; /* 0 - 0x900 */
+    MemoryRegion iomem_hi; /* 0xa00 - 0x100000 */
     uint32_t leds;
     uint32_t brk;
     uint32_t gpout;
@@ -57,7 +72,14 @@ typedef struct {
     SerialState *uart;
 } MaltaFPGAState;
 
-static PITState *pit;
+static ISADevice *pit;
+
+static struct _loaderparams {
+    int ram_size;
+    const char *kernel_filename;
+    const char *kernel_cmdline;
+    const char *initrd_filename;
+} loaderparams;
 
 /* Malta FPGA */
 static void malta_fpga_update_display(void *opaque)
@@ -74,8 +96,8 @@ static void malta_fpga_update_display(void *opaque)
     }
     leds_text[8] = '\0';
 
-    qemu_chr_printf(s->display, "\e[H\n\n|\e[32m%-8.8s\e[00m|\r\n", leds_text);
-    qemu_chr_printf(s->display, "\n\n\n\n|\e[31m%-8.8s\e[00m|", s->display_text);
+    qemu_chr_fe_printf(s->display, "\e[H\n\n|\e[32m%-8.8s\e[00m|\r\n", leds_text);
+    qemu_chr_fe_printf(s->display, "\n\n\n\n|\e[31m%-8.8s\e[00m|", s->display_text);
 }
 
 /*
@@ -91,9 +113,9 @@ static void malta_fpga_update_display(void *opaque)
 //~ #define DEBUG
 
 #if defined(DEBUG)
-#  define logout(fmt, args...) fprintf(stderr, "MALTA\t%-24s" fmt, __func__, ##args)
+#  define logout(fmt, ...) fprintf(stderr, "MALTA\t%-24s" fmt, __func__, ## __VA_ARGS__)
 #else
-#  define logout(fmt, args...) ((void)0)
+#  define logout(fmt, ...) ((void)0)
 #endif
 
 struct _eeprom24c0x_t {
@@ -111,7 +133,7 @@ struct _eeprom24c0x_t {
 typedef struct _eeprom24c0x_t eeprom24c0x_t;
 
 static eeprom24c0x_t eeprom = {
-    contents: {
+    .contents = {
         /* 00000000: */ 0x80,0x08,0x04,0x0D,0x0A,0x01,0x40,0x00,
         /* 00000008: */ 0x01,0x75,0x54,0x00,0x82,0x08,0x00,0x01,
         /* 00000010: */ 0x8F,0x04,0x02,0x01,0x01,0x00,0x0E,0x00,
@@ -131,7 +153,7 @@ static eeprom24c0x_t eeprom = {
     },
 };
 
-static uint8_t eeprom24c0x_read()
+static uint8_t eeprom24c0x_read(void)
 {
     logout("%u: scl = %u, sda = %u, data = 0x%02x\n",
         eeprom.tick, eeprom.scl, eeprom.sda, eeprom.data);
@@ -196,7 +218,8 @@ static void eeprom24c0x_write(int scl, int sda)
     eeprom.sda = sda;
 }
 
-static uint32_t malta_fpga_readl(void *opaque, target_phys_addr_t addr)
+static uint64_t malta_fpga_read(void *opaque, target_phys_addr_t addr,
+                                unsigned size)
 {
     MaltaFPGAState *s = opaque;
     uint32_t val = 0;
@@ -209,7 +232,7 @@ static uint32_t malta_fpga_readl(void *opaque, target_phys_addr_t addr)
     /* SWITCH Register */
     case 0x00200:
         val = 0x00000000;		/* All switches closed */
-	break;
+        break;
 
     /* STATUS Register */
     case 0x00208:
@@ -276,15 +299,15 @@ static uint32_t malta_fpga_readl(void *opaque, target_phys_addr_t addr)
     default:
 #if 0
         printf ("malta_fpga_read: Bad register offset 0x" TARGET_FMT_lx "\n",
-		addr);
+                addr);
 #endif
         break;
     }
     return val;
 }
 
-static void malta_fpga_writel(void *opaque, target_phys_addr_t addr,
-                              uint32_t val)
+static void malta_fpga_write(void *opaque, target_phys_addr_t addr,
+                             uint64_t val, unsigned size)
 {
     MaltaFPGAState *s = opaque;
     uint32_t saddr;
@@ -309,7 +332,7 @@ static void malta_fpga_writel(void *opaque, target_phys_addr_t addr,
 
     /* ASCIIWORD Register */
     case 0x00410:
-        snprintf(s->display_text, 9, "%08X", val);
+        snprintf(s->display_text, 9, "%08X", (uint32_t)val);
         malta_fpga_update_display(s);
         break;
 
@@ -363,25 +386,19 @@ static void malta_fpga_writel(void *opaque, target_phys_addr_t addr,
     default:
 #if 0
         printf ("malta_fpga_write: Bad register offset 0x" TARGET_FMT_lx "\n",
-		addr);
+                addr);
 #endif
         break;
     }
 }
 
-static CPUReadMemoryFunc *malta_fpga_read[] = {
-   malta_fpga_readl,
-   malta_fpga_readl,
-   malta_fpga_readl
+static const MemoryRegionOps malta_fpga_ops = {
+    .read = malta_fpga_read,
+    .write = malta_fpga_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static CPUWriteMemoryFunc *malta_fpga_write[] = {
-   malta_fpga_writel,
-   malta_fpga_writel,
-   malta_fpga_writel
-};
-
-void malta_fpga_reset(void *opaque)
+static void malta_fpga_reset(void *opaque)
 {
     MaltaFPGAState *s = opaque;
 
@@ -395,37 +412,42 @@ void malta_fpga_reset(void *opaque)
 
     s->display_text[8] = '\0';
     snprintf(s->display_text, 9, "        ");
-    malta_fpga_update_display(s);
 }
 
-MaltaFPGAState *malta_fpga_init(target_phys_addr_t base, CPUState *env)
+static void malta_fpga_led_init(CharDriverState *chr)
+{
+    qemu_chr_fe_printf(chr, "\e[HMalta LEDBAR\r\n");
+    qemu_chr_fe_printf(chr, "+--------+\r\n");
+    qemu_chr_fe_printf(chr, "+        +\r\n");
+    qemu_chr_fe_printf(chr, "+--------+\r\n");
+    qemu_chr_fe_printf(chr, "\n");
+    qemu_chr_fe_printf(chr, "Malta ASCII\r\n");
+    qemu_chr_fe_printf(chr, "+--------+\r\n");
+    qemu_chr_fe_printf(chr, "+        +\r\n");
+    qemu_chr_fe_printf(chr, "+--------+\r\n");
+}
+
+static MaltaFPGAState *malta_fpga_init(MemoryRegion *address_space,
+         target_phys_addr_t base, qemu_irq uart_irq, CharDriverState *uart_chr)
 {
     MaltaFPGAState *s;
-    CharDriverState *uart_chr;
-    int malta;
 
-    s = (MaltaFPGAState *)qemu_mallocz(sizeof(MaltaFPGAState));
+    s = (MaltaFPGAState *)g_malloc0(sizeof(MaltaFPGAState));
 
-    malta = cpu_register_io_memory(0, malta_fpga_read,
-                                   malta_fpga_write, s);
+    memory_region_init_io(&s->iomem, &malta_fpga_ops, s,
+                          "malta-fpga", 0x100000);
+    memory_region_init_alias(&s->iomem_lo, "malta-fpga",
+                             &s->iomem, 0, 0x900);
+    memory_region_init_alias(&s->iomem_hi, "malta-fpga",
+                             &s->iomem, 0xa00, 0x10000-0xa00);
 
-    cpu_register_physical_memory(base, 0x900, malta);
-    cpu_register_physical_memory(base + 0xa00, 0x100000 - 0xa00, malta);
+    memory_region_add_subregion(address_space, base, &s->iomem_lo);
+    memory_region_add_subregion(address_space, base + 0xa00, &s->iomem_hi);
 
-    s->display = qemu_chr_open("vc");
-    qemu_chr_printf(s->display, "\e[HMalta LEDBAR\r\n");
-    qemu_chr_printf(s->display, "+--------+\r\n");
-    qemu_chr_printf(s->display, "+        +\r\n");
-    qemu_chr_printf(s->display, "+--------+\r\n");
-    qemu_chr_printf(s->display, "\n");
-    qemu_chr_printf(s->display, "Malta ASCII\r\n");
-    qemu_chr_printf(s->display, "+--------+\r\n");
-    qemu_chr_printf(s->display, "+        +\r\n");
-    qemu_chr_printf(s->display, "+--------+\r\n");
+    s->display = qemu_chr_new("fpga", "vc:320x200", malta_fpga_led_init);
 
-    uart_chr = qemu_chr_open("vc");
-    qemu_chr_printf(uart_chr, "CBUS UART\r\n");
-    s->uart = serial_mm_init(base + 0x900, 3, env->irq[2], uart_chr, 1);
+    s->uart = serial_mm_init(address_space, base + 0x900, 3, uart_irq,
+                             230400, uart_chr, DEVICE_NATIVE_ENDIAN);
 
     malta_fpga_reset(s);
     qemu_register_reset(malta_fpga_reset, s);
@@ -433,48 +455,20 @@ MaltaFPGAState *malta_fpga_init(target_phys_addr_t base, CPUState *env)
     return s;
 }
 
-/* Audio support */
-#ifdef HAS_AUDIO
-static void audio_init (PCIBus *pci_bus)
-{
-    struct soundhw *c;
-    int audio_enabled = 0;
-
-    for (c = soundhw; !audio_enabled && c->name; ++c) {
-        audio_enabled = c->enabled;
-    }
-
-    if (audio_enabled) {
-        AudioState *s;
-
-        s = AUD_init ();
-        if (s) {
-            for (c = soundhw; c->name; ++c) {
-                if (c->enabled)
-                    c->init.init_pci (pci_bus, s);
-            }
-        }
-    }
-}
-#endif
-
 /* Network support */
-static void network_init (PCIBus *pci_bus)
+static void network_init(void)
 {
     int i;
-    NICInfo *nd;
 
     for(i = 0; i < nb_nics; i++) {
-        nd = &nd_table[i];
-        if (!nd->model) {
-            nd->model = "pcnet";
-        }
-        if (i == 0  && strcmp(nd->model, "pcnet") == 0) {
+        NICInfo *nd = &nd_table[i];
+        const char *default_devaddr = NULL;
+
+        if (i == 0 && (!nd->model || strcmp(nd->model, "pcnet") == 0))
             /* The malta board has a PCNet card using PCI SLOT 11 */
-            pci_nic_init(pci_bus, nd, 88);
-        } else {
-            pci_nic_init(pci_bus, nd, -1);
-        }
+            default_devaddr = "0b";
+
+        pci_nic_init_nofail(nd, "pcnet", default_devaddr);
     }
 }
 
@@ -500,33 +494,34 @@ static void network_init (PCIBus *pci_bus)
      a3 - RAM size in bytes
 */
 
-static void write_bootloader (CPUState *env, unsigned long bios_offset, int64_t kernel_entry)
+static void write_bootloader (CPUState *env, uint8_t *base,
+                              int64_t kernel_entry)
 {
     uint32_t *p;
 
     /* Small bootloader */
-    p = (uint32_t *) (phys_ram_base + bios_offset);
+    p = (uint32_t *)base;
     stl_raw(p++, 0x0bf00160);                                      /* j 0x1fc00580 */
     stl_raw(p++, 0x00000000);                                      /* nop */
 
     /* YAMON service vector */
-    stl_raw(phys_ram_base + bios_offset + 0x500, 0xbfc00580);      /* start: */					
-    stl_raw(phys_ram_base + bios_offset + 0x504, 0xbfc0083c);      /* print_count: */
-    stl_raw(phys_ram_base + bios_offset + 0x520, 0xbfc00580);      /* start: */					
-    stl_raw(phys_ram_base + bios_offset + 0x52c, 0xbfc00800);      /* flush_cache: */
-    stl_raw(phys_ram_base + bios_offset + 0x534, 0xbfc00808);      /* print: */
-    stl_raw(phys_ram_base + bios_offset + 0x538, 0xbfc00800);      /* reg_cpu_isr: */
-    stl_raw(phys_ram_base + bios_offset + 0x53c, 0xbfc00800);      /* unred_cpu_isr: */
-    stl_raw(phys_ram_base + bios_offset + 0x540, 0xbfc00800);      /* reg_ic_isr: */
-    stl_raw(phys_ram_base + bios_offset + 0x544, 0xbfc00800);      /* unred_ic_isr: */
-    stl_raw(phys_ram_base + bios_offset + 0x548, 0xbfc00800);      /* reg_esr: */
-    stl_raw(phys_ram_base + bios_offset + 0x54c, 0xbfc00800);      /* unreg_esr: */
-    stl_raw(phys_ram_base + bios_offset + 0x550, 0xbfc00800);      /* getchar: */
-    stl_raw(phys_ram_base + bios_offset + 0x554, 0xbfc00800);      /* syscon_read: */
+    stl_raw(base + 0x500, 0xbfc00580);      /* start: */
+    stl_raw(base + 0x504, 0xbfc0083c);      /* print_count: */
+    stl_raw(base + 0x520, 0xbfc00580);      /* start: */
+    stl_raw(base + 0x52c, 0xbfc00800);      /* flush_cache: */
+    stl_raw(base + 0x534, 0xbfc00808);      /* print: */
+    stl_raw(base + 0x538, 0xbfc00800);      /* reg_cpu_isr: */
+    stl_raw(base + 0x53c, 0xbfc00800);      /* unred_cpu_isr: */
+    stl_raw(base + 0x540, 0xbfc00800);      /* reg_ic_isr: */
+    stl_raw(base + 0x544, 0xbfc00800);      /* unred_ic_isr: */
+    stl_raw(base + 0x548, 0xbfc00800);      /* reg_esr: */
+    stl_raw(base + 0x54c, 0xbfc00800);      /* unreg_esr: */
+    stl_raw(base + 0x550, 0xbfc00800);      /* getchar: */
+    stl_raw(base + 0x554, 0xbfc00800);      /* syscon_read: */
 
 
     /* Second part of the bootloader */
-    p = (uint32_t *) (phys_ram_base + bios_offset + 0x580);
+    p = (uint32_t *) (base + 0x580);
     stl_raw(p++, 0x24040002);                                      /* addiu a0, zero, 2 */
     stl_raw(p++, 0x3c1d0000 | (((ENVP_ADDR - 64) >> 16) & 0xffff)); /* lui sp, high(ENVP_ADDR) */
     stl_raw(p++, 0x37bd0000 | ((ENVP_ADDR - 64) & 0xffff));        /* ori sp, sp, low(ENVP_ADDR) */
@@ -534,10 +529,19 @@ static void write_bootloader (CPUState *env, unsigned long bios_offset, int64_t 
     stl_raw(p++, 0x34a50000 | (ENVP_ADDR & 0xffff));               /* ori a1, a1, low(ENVP_ADDR) */
     stl_raw(p++, 0x3c060000 | (((ENVP_ADDR + 8) >> 16) & 0xffff)); /* lui a2, high(ENVP_ADDR + 8) */
     stl_raw(p++, 0x34c60000 | ((ENVP_ADDR + 8) & 0xffff));         /* ori a2, a2, low(ENVP_ADDR + 8) */
-    stl_raw(p++, 0x3c070000 | (env->ram_size >> 16));              /* lui a3, high(env->ram_size) */
-    stl_raw(p++, 0x34e70000 | (env->ram_size & 0xffff));           /* ori a3, a3, low(env->ram_size) */
+    stl_raw(p++, 0x3c070000 | (loaderparams.ram_size >> 16));     /* lui a3, high(ram_size) */
+    stl_raw(p++, 0x34e70000 | (loaderparams.ram_size & 0xffff));  /* ori a3, a3, low(ram_size) */
 
     /* Load BAR registers as done by YAMON */
+    stl_raw(p++, 0x3c09b400);                                      /* lui t1, 0xb400 */
+
+#ifdef TARGET_WORDS_BIGENDIAN
+    stl_raw(p++, 0x3c08df00);                                      /* lui t0, 0xdf00 */
+#else
+    stl_raw(p++, 0x340800df);                                      /* ori t0, r0, 0x00df */
+#endif
+    stl_raw(p++, 0xad280068);                                      /* sw t0, 0x0068(t1) */
+
     stl_raw(p++, 0x3c09bbe0);                                      /* lui t1, 0xbbe0 */
 
 #ifdef TARGET_WORDS_BIGENDIAN
@@ -586,7 +590,7 @@ static void write_bootloader (CPUState *env, unsigned long bios_offset, int64_t 
     stl_raw(p++, 0x00000000);                                      /* nop */
 
     /* YAMON subroutines */
-    p = (uint32_t *) (phys_ram_base + bios_offset + 0x800);
+    p = (uint32_t *) (base + 0x800);
     stl_raw(p++, 0x03e00008);                                     /* jr ra */
     stl_raw(p++, 0x24020000);                                     /* li v0,0 */
    /* 808 YAMON print */
@@ -630,127 +634,167 @@ static void write_bootloader (CPUState *env, unsigned long bios_offset, int64_t 
 
 }
 
-static void prom_set(int index, const char *string, ...)
+static void GCC_FMT_ATTR(3, 4) prom_set(uint32_t* prom_buf, int index,
+                                        const char *string, ...)
 {
     va_list ap;
-    int32_t *p;
     int32_t table_addr;
-    char *s;
 
     if (index >= ENVP_NB_ENTRIES)
         return;
 
-    p = (int32_t *) (phys_ram_base + ENVP_ADDR + VIRT_TO_PHYS_ADDEND);
-    p += index;
-
     if (string == NULL) {
-        stl_raw(p, 0);
+        prom_buf[index] = 0;
         return;
     }
 
-    table_addr = ENVP_ADDR + sizeof(int32_t) * ENVP_NB_ENTRIES + index * ENVP_ENTRY_SIZE;
-    s = (char *) (phys_ram_base + VIRT_TO_PHYS_ADDEND + table_addr);
-
-    stl_raw(p, table_addr);
+    table_addr = sizeof(int32_t) * ENVP_NB_ENTRIES + index * ENVP_ENTRY_SIZE;
+    prom_buf[index] = tswap32(ENVP_ADDR + table_addr);
 
     va_start(ap, string);
-    vsnprintf (s, ENVP_ENTRY_SIZE, string, ap);
+    vsnprintf((char *)prom_buf + table_addr, ENVP_ENTRY_SIZE, string, ap);
     va_end(ap);
 }
 
 /* Kernel */
-static int64_t load_kernel (CPUState *env)
+static int64_t load_kernel (void)
 {
-    int64_t kernel_entry, kernel_low, kernel_high;
-    int index = 0;
+    int64_t kernel_entry, kernel_high;
     long initrd_size;
     ram_addr_t initrd_offset;
+    int big_endian;
+    uint32_t *prom_buf;
+    long prom_size;
+    int prom_index = 0;
 
-    if (load_elf(env->kernel_filename, VIRT_TO_PHYS_ADDEND,
-                 &kernel_entry, &kernel_low, &kernel_high) < 0) {
+#ifdef TARGET_WORDS_BIGENDIAN
+    big_endian = 1;
+#else
+    big_endian = 0;
+#endif
+
+    if (load_elf(loaderparams.kernel_filename, cpu_mips_kseg0_to_phys, NULL,
+                 (uint64_t *)&kernel_entry, NULL, (uint64_t *)&kernel_high,
+                 big_endian, ELF_MACHINE, 1) < 0) {
         fprintf(stderr, "qemu: could not load kernel '%s'\n",
-                env->kernel_filename);
+                loaderparams.kernel_filename);
         exit(1);
     }
 
     /* load initrd */
     initrd_size = 0;
     initrd_offset = 0;
-    if (env->initrd_filename) {
-        initrd_size = get_image_size (env->initrd_filename);
+    if (loaderparams.initrd_filename) {
+        initrd_size = get_image_size (loaderparams.initrd_filename);
         if (initrd_size > 0) {
             initrd_offset = (kernel_high + ~TARGET_PAGE_MASK) & TARGET_PAGE_MASK;
-            if (initrd_offset + initrd_size > env->ram_size) {
+            if (initrd_offset + initrd_size > ram_size) {
                 fprintf(stderr,
                         "qemu: memory too small for initial ram disk '%s'\n",
-                        env->initrd_filename);
+                        loaderparams.initrd_filename);
                 exit(1);
             }
-            initrd_size = load_image(env->initrd_filename,
-                                     phys_ram_base + initrd_offset);
+            initrd_size = load_image_targphys(loaderparams.initrd_filename,
+                                              initrd_offset,
+                                              ram_size - initrd_offset);
         }
         if (initrd_size == (target_ulong) -1) {
             fprintf(stderr, "qemu: could not load initial ram disk '%s'\n",
-                    env->initrd_filename);
+                    loaderparams.initrd_filename);
             exit(1);
         }
     }
 
-    /* Store command line.  */
-    prom_set(index++, env->kernel_filename);
-    if (initrd_size > 0)
-        prom_set(index++, "rd_start=0x" TARGET_FMT_lx " rd_size=%li %s",
-                 PHYS_TO_VIRT(initrd_offset), initrd_size,
-                 env->kernel_cmdline);
-    else
-        prom_set(index++, env->kernel_cmdline);
+    /* Setup prom parameters. */
+    prom_size = ENVP_NB_ENTRIES * (sizeof(int32_t) + ENVP_ENTRY_SIZE);
+    prom_buf = g_malloc(prom_size);
 
-    /* Setup minimum environment variables */
-    prom_set(index++, "memsize");
-    prom_set(index++, "%i", env->ram_size);
-    prom_set(index++, "modetty0");
-    prom_set(index++, "38400n8r");
-    prom_set(index++, NULL);
+    prom_set(prom_buf, prom_index++, "%s", loaderparams.kernel_filename);
+    if (initrd_size > 0) {
+        prom_set(prom_buf, prom_index++, "rd_start=0x%" PRIx64 " rd_size=%li %s",
+                 cpu_mips_phys_to_kseg0(NULL, initrd_offset), initrd_size,
+                 loaderparams.kernel_cmdline);
+    } else {
+        prom_set(prom_buf, prom_index++, "%s", loaderparams.kernel_cmdline);
+    }
+
+    prom_set(prom_buf, prom_index++, "memsize");
+    prom_set(prom_buf, prom_index++, "%i", loaderparams.ram_size);
+    prom_set(prom_buf, prom_index++, "modetty0");
+    prom_set(prom_buf, prom_index++, "38400n8r");
+    prom_set(prom_buf, prom_index++, NULL);
+
+    rom_add_blob_fixed("prom", prom_buf, prom_size,
+                       cpu_mips_kseg0_to_phys(NULL, ENVP_ADDR));
 
     return kernel_entry;
+}
+
+static void malta_mips_config(CPUState *env)
+{
+    env->mvp->CP0_MVPConf0 |= ((smp_cpus - 1) << CP0MVPC0_PVPE) |
+                         ((smp_cpus * env->nr_threads - 1) << CP0MVPC0_PTC);
 }
 
 static void main_cpu_reset(void *opaque)
 {
     CPUState *env = opaque;
     cpu_reset(env);
-    cpu_mips_register(env, NULL);
 
-    /* The bootload does not need to be rewritten as it is located in a
+    /* The bootloader does not need to be rewritten as it is located in a
        read only location. The kernel location and the arguments table
        location does not change. */
-    if (env->kernel_filename) {
+    if (loaderparams.kernel_filename) {
         env->CP0_Status &= ~((1 << CP0St_BEV) | (1 << CP0St_ERL));
-        load_kernel (env);
+    }
+
+    malta_mips_config(env);
+}
+
+static void cpu_request_exit(void *opaque, int irq, int level)
+{
+    CPUState *env = cpu_single_env;
+
+    if (env && level) {
+        cpu_exit(env);
     }
 }
 
 static
-void mips_malta_init (int ram_size, int vga_ram_size, int boot_device,
-                      DisplayState *ds, const char **fd_filename, int snapshot,
+void mips_malta_init (ram_addr_t ram_size,
+                      const char *boot_device,
                       const char *kernel_filename, const char *kernel_cmdline,
                       const char *initrd_filename, const char *cpu_model)
 {
-    char buf[1024];
-    unsigned long bios_offset;
+    char *filename;
+    pflash_t *fl;
+    MemoryRegion *system_memory = get_system_memory();
+    MemoryRegion *ram = g_new(MemoryRegion, 1);
+    MemoryRegion *bios, *bios_alias = g_new(MemoryRegion, 1);
+    target_long bios_size;
     int64_t kernel_entry;
     PCIBus *pci_bus;
     CPUState *env;
-    RTCState *rtc_state;
-    /* fdctrl_t *floppy_controller; */
-    MaltaFPGAState *malta_fpga;
-    int ret;
-    mips_def_t *def;
-    qemu_irq *i8259;
+    qemu_irq *i8259 = NULL, *isa_irq;
+    qemu_irq *cpu_exit_irq;
     int piix4_devfn;
-    uint8_t *eeprom_buf;
     i2c_bus *smbus;
     int i;
+    DriveInfo *dinfo;
+    DriveInfo *hd[MAX_IDE_BUS * MAX_IDE_DEVS];
+    DriveInfo *fd[MAX_FD];
+    int fl_idx = 0;
+    int fl_sectors = 0;
+    int be;
+
+    /* Make sure the first 3 serial ports are associated with a device. */
+    for(i = 0; i < 3; i++) {
+        if (!serial_hds[i]) {
+            char label[32];
+            snprintf(label, sizeof(label), "serial%d", i);
+            serial_hds[i] = qemu_chr_new(label, "null", NULL);
+        }
+    }
 
     /* init CPUs */
     if (cpu_model == NULL) {
@@ -760,120 +804,203 @@ void mips_malta_init (int ram_size, int vga_ram_size, int boot_device,
         cpu_model = "24Kf";
 #endif
     }
-    if (mips_find_by_name(cpu_model, &def) != 0)
-        def = NULL;
-    env = cpu_init();
-    cpu_mips_register(env, def);
-    register_savevm("cpu", 0, 3, cpu_save, cpu_load, env);
-    qemu_register_reset(main_cpu_reset, env);
+
+    for (i = 0; i < smp_cpus; i++) {
+        env = cpu_init(cpu_model);
+        if (!env) {
+            fprintf(stderr, "Unable to find CPU definition\n");
+            exit(1);
+        }
+        /* Init internal devices */
+        cpu_mips_irq_init_cpu(env);
+        cpu_mips_clock_init(env);
+        qemu_register_reset(main_cpu_reset, env);
+    }
+    env = first_cpu;
 
     /* allocate RAM */
-    cpu_register_physical_memory(0, ram_size, IO_MEM_RAM);
+    if (ram_size > (256 << 20)) {
+        fprintf(stderr,
+                "qemu: Too much memory for this machine: %d MB, maximum 256 MB\n",
+                ((unsigned int)ram_size / (1 << 20)));
+        exit(1);
+    }
+    memory_region_init_ram(ram, NULL, "mips_malta.ram", ram_size);
+    memory_region_add_subregion(system_memory, 0, ram);
 
-    /* Map the bios at two physical locations, as on the real board */
-    bios_offset = ram_size + vga_ram_size;
-    cpu_register_physical_memory(0x1e000000LL,
-                                 BIOS_SIZE, bios_offset | IO_MEM_ROM);
-    cpu_register_physical_memory(0x1fc00000LL,
-                                 BIOS_SIZE, bios_offset | IO_MEM_ROM);
-
+#ifdef TARGET_WORDS_BIGENDIAN
+    be = 1;
+#else
+    be = 0;
+#endif
     /* FPGA */
-    malta_fpga = malta_fpga_init(0x1f000000LL, env);
+    malta_fpga_init(system_memory, 0x1f000000LL, env->irq[2], serial_hds[2]);
 
-    /* Load a BIOS image unless a kernel image has been specified. */
-    if (!kernel_filename) {
-        snprintf(buf, sizeof(buf), "%s/%s", bios_dir, BIOS_FILENAME);
-        ret = load_image(buf, phys_ram_base + bios_offset);
-        if (ret < 0 || ret > BIOS_SIZE) {
-            fprintf(stderr,
-                    "qemu: Could not load MIPS bios '%s', and no -kernel argument was specified\n",
-                    buf);
-            exit(1);
+    /* Load firmware in flash / BIOS unless we boot directly into a kernel. */
+    if (kernel_filename) {
+        /* Write a small bootloader to the flash location. */
+        bios = g_new(MemoryRegion, 1);
+        memory_region_init_ram(bios, NULL, "mips_malta.bios", BIOS_SIZE);
+        memory_region_set_readonly(bios, true);
+        memory_region_init_alias(bios_alias, "bios.1fc", bios, 0, BIOS_SIZE);
+        /* Map the bios at two physical locations, as on the real board. */
+        memory_region_add_subregion(system_memory, 0x1e000000LL, bios);
+        memory_region_add_subregion(system_memory, 0x1fc00000LL, bios_alias);
+        loaderparams.ram_size = ram_size;
+        loaderparams.kernel_filename = kernel_filename;
+        loaderparams.kernel_cmdline = kernel_cmdline;
+        loaderparams.initrd_filename = initrd_filename;
+        kernel_entry = load_kernel();
+        write_bootloader(env, memory_region_get_ram_ptr(bios), kernel_entry);
+    } else {
+        dinfo = drive_get(IF_PFLASH, 0, fl_idx);
+        if (dinfo) {
+            /* Load firmware from flash. */
+            bios_size = 0x400000;
+            fl_sectors = bios_size >> 16;
+#ifdef DEBUG_BOARD_INIT
+            printf("Register parallel flash %d size " TARGET_FMT_lx " at "
+                   "addr %08llx '%s' %x\n",
+                   fl_idx, bios_size, 0x1e000000LL,
+                   bdrv_get_device_name(dinfo->bdrv), fl_sectors);
+#endif
+            fl = pflash_cfi01_register(0x1e000000LL,
+                                       NULL, "mips_malta.bios", BIOS_SIZE,
+                                       dinfo->bdrv, 65536, fl_sectors,
+                                       4, 0x0000, 0x0000, 0x0000, 0x0000, be);
+            bios = pflash_cfi01_get_memory(fl);
+            /* Map the bios at two physical locations, as on the real board. */
+            memory_region_init_alias(bios_alias, "bios.1fc",
+                                     bios, 0, BIOS_SIZE);
+            memory_region_add_subregion(system_memory, 0x1fc00000LL,
+                                        bios_alias);
+           fl_idx++;
+        } else {
+            bios = g_new(MemoryRegion, 1);
+            memory_region_init_ram(bios, NULL, "mips_malta.bios", BIOS_SIZE);
+            memory_region_set_readonly(bios, true);
+            memory_region_init_alias(bios_alias, "bios.1fc",
+                                     bios, 0, BIOS_SIZE);
+            /* Map the bios at two physical locations, as on the real board. */
+            memory_region_add_subregion(system_memory, 0x1e000000LL, bios);
+            memory_region_add_subregion(system_memory, 0x1fc00000LL,
+                                        bios_alias);
+            /* Load a BIOS image. */
+            if (bios_name == NULL)
+                bios_name = BIOS_FILENAME;
+            filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
+            if (filename) {
+                bios_size = load_image_targphys(filename, 0x1fc00000LL,
+                                                BIOS_SIZE);
+                g_free(filename);
+            } else {
+                bios_size = -1;
+            }
+            if ((bios_size < 0 || bios_size > BIOS_SIZE) && !kernel_filename) {
+                fprintf(stderr,
+                        "qemu: Could not load MIPS bios '%s', and no -kernel argument was specified\n",
+                        bios_name);
+                exit(1);
+            }
         }
         /* In little endian mode the 32bit words in the bios are swapped,
            a neat trick which allows bi-endian firmware. */
 #ifndef TARGET_WORDS_BIGENDIAN
         {
-            uint32_t *addr;
-            for (addr = (uint32_t *)(phys_ram_base + bios_offset);
-                 addr < (uint32_t *)(phys_ram_base + bios_offset + ret);
-		 addr++) {
-                *addr = bswap32(*addr);
+            uint32_t *addr = memory_region_get_ram_ptr(bios);
+            uint32_t *end = addr + bios_size;
+            while (addr < end) {
+                bswap32s(addr);
             }
         }
 #endif
     }
 
-    /* If a kernel image has been specified, write a small bootloader
-       to the flash location. */
-    if (kernel_filename) {
-        env->ram_size = ram_size;
-        env->kernel_filename = kernel_filename;
-        env->kernel_cmdline = kernel_cmdline;
-        env->initrd_filename = initrd_filename;
-        kernel_entry = load_kernel(env);
-        env->CP0_Status &= ~((1 << CP0St_BEV) | (1 << CP0St_ERL));
-        write_bootloader(env, bios_offset, kernel_entry);
-    }
-
     /* Board ID = 0x420 (Malta Board with CoreLV)
        XXX: theoretically 0x1e000010 should map to flash and 0x1fc00010 should
        map to the board ID. */
-    stl_raw(phys_ram_base + bios_offset + 0x10, 0x00000420);
+    stl_p(memory_region_get_ram_ptr(bios) + 0x10, 0x00000420);
 
     /* Init internal devices */
     cpu_mips_irq_init_cpu(env);
     cpu_mips_clock_init(env);
-    cpu_mips_irqctrl_init();
+
+    /*
+     * We have a circular dependency problem: pci_bus depends on isa_irq,
+     * isa_irq is provided by i8259, i8259 depends on ISA, ISA depends
+     * on piix4, and piix4 depends on pci_bus.  To stop the cycle we have
+     * qemu_irq_proxy() adds an extra bit of indirection, allowing us
+     * to resolve the isa_irq -> i8259 dependency after i8259 is initialized.
+     */
+    isa_irq = qemu_irq_proxy(&i8259, 16);
+
+    /* Northbridge */
+    pci_bus = gt64120_register(isa_irq);
+
+    /* Southbridge */
+    ide_drive_get(hd, MAX_IDE_BUS);
+
+    piix4_devfn = piix4_init(pci_bus, 80);
 
     /* Interrupt controller */
     /* The 8259 is attached to the MIPS CPU INT0 pin, ie interrupt 2 */
     i8259 = i8259_init(env->irq[2]);
 
-    /* Northbridge */
-    pci_bus = pci_gt64120_init(i8259);
-
-    /* Southbridge */
-    piix4_devfn = piix4_init(pci_bus, 80);
-    pci_piix4_ide_init(pci_bus, bs_table, piix4_devfn + 1, i8259);
+    isa_bus_irqs(i8259);
+    pci_piix4_ide_init(pci_bus, hd, piix4_devfn + 1);
     usb_uhci_piix4_init(pci_bus, piix4_devfn + 2);
-    smbus = piix4_pm_init(pci_bus, piix4_devfn + 3, 0x1100);
-    eeprom_buf = qemu_mallocz(8 * 256); /* XXX: make this persistent */
-    for (i = 0; i < 8; i++) {
-        /* TODO: Populate SPD eeprom data.  */
-        smbus_eeprom_device_init(smbus, 0x50 + i, eeprom_buf + (i * 256));
-    }
-    pit = pit_init(0x40, i8259[0]);
-    DMA_init(0);
+    smbus = piix4_pm_init(pci_bus, piix4_devfn + 3, 0x1100, isa_get_irq(9),
+                          NULL, NULL, 0);
+    /* TODO: Populate SPD eeprom data.  */
+    smbus_eeprom_init(smbus, 8, NULL, 0);
+    pit = pit_init(0x40, 0);
+    cpu_exit_irq = qemu_allocate_irqs(cpu_request_exit, NULL, 1);
+    DMA_init(0, cpu_exit_irq);
 
     /* Super I/O */
-    i8042_init(i8259[1], i8259[12], 0x60);
-    rtc_state = rtc_init(0x70, i8259[8]);
-    if (serial_hds[0])
-        serial_init(0x3f8, i8259[4], serial_hds[0]);
-    if (serial_hds[1])
-        serial_init(0x2f8, i8259[3], serial_hds[1]);
+    isa_create_simple("i8042");
+
+    rtc_init(2000, NULL);
+    serial_isa_init(0, serial_hds[0]);
+    serial_isa_init(1, serial_hds[1]);
     if (parallel_hds[0])
-        parallel_init(0x378, i8259[7], parallel_hds[0]);
-    /* XXX: The floppy controller does not work correctly, something is
-       probably wrong.
-    floppy_controller = fdctrl_init(i8259[6], 2, 0, 0x3f0, fd_table); */
+        parallel_init(0, parallel_hds[0]);
+    for(i = 0; i < MAX_FD; i++) {
+        fd[i] = drive_get(IF_FLOPPY, 0, i);
+    }
+    fdctrl_init_isa(fd);
 
     /* Sound card */
-#ifdef HAS_AUDIO
-    audio_init(pci_bus);
-#endif
+    audio_init(NULL, pci_bus);
 
     /* Network card */
-    network_init(pci_bus);
+    network_init();
 
     /* Optional PCI video card */
-    pci_cirrus_vga_init(pci_bus, ds, phys_ram_base + ram_size,
-                        ram_size, vga_ram_size);
+    if (cirrus_vga_enabled) {
+        pci_cirrus_vga_init(pci_bus);
+    } else if (vmsvga_enabled) {
+        if (!pci_vmsvga_init(pci_bus)) {
+            fprintf(stderr, "Warning: vmware_vga not available,"
+                    " using standard VGA instead\n");
+            pci_vga_init(pci_bus);
+        }
+    } else if (std_vga_enabled) {
+        pci_vga_init(pci_bus);
+    }
 }
 
-QEMUMachine mips_malta_machine = {
-    "malta",
-    "MIPS Malta Core LV",
-    mips_malta_init,
+static QEMUMachine mips_malta_machine = {
+    .name = "malta",
+    .desc = "MIPS Malta Core LV",
+    .init = mips_malta_init,
+    .max_cpus = 16,
+    .is_default = 1,
 };
+
+static void mips_malta_machine_init(void)
+{
+    qemu_register_machine(&mips_malta_machine);
+}
+
+machine_init(mips_malta_machine_init);

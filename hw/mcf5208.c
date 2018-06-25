@@ -1,11 +1,19 @@
-/* 
+/*
  * Motorola ColdFire MCF5208 SoC emulation.
  *
  * Copyright (c) 2007 CodeSourcery.
  *
- * This code is licenced under the GPL
+ * This code is licensed under the GPL
  */
-#include "vl.h"
+#include "hw.h"
+#include "mcf.h"
+#include "qemu-timer.h"
+#include "sysemu.h"
+#include "net.h"
+#include "boards.h"
+#include "loader.h"
+#include "elf.h"
+#include "exec-memory.h"
 
 #define SYS_FREQ 66000000
 
@@ -20,6 +28,7 @@
 #define PCSR_PRE_MASK   0x0f00
 
 typedef struct {
+    MemoryRegion iomem;
     qemu_irq irq;
     ptimer_state *timer;
     uint16_t pcsr;
@@ -35,9 +44,10 @@ static void m5208_timer_update(m5208_timer_state *s)
         qemu_irq_lower(s->irq);
 }
 
-static void m5208_timer_write(m5208_timer_state *s, int offset,
-                              uint32_t value)
+static void m5208_timer_write(void *opaque, target_phys_addr_t offset,
+                              uint64_t value, unsigned size)
 {
+    m5208_timer_state *s = (m5208_timer_state *)opaque;
     int prescale;
     int limit;
     switch (offset) {
@@ -83,8 +93,8 @@ static void m5208_timer_write(m5208_timer_state *s, int offset,
     case 4:
         break;
     default:
-        /* Should never happen.  */
-        abort();
+        hw_error("m5208_timer_write: Bad offset 0x%x\n", (int)offset);
+        break;
     }
     m5208_timer_update(s);
 }
@@ -96,31 +106,34 @@ static void m5208_timer_trigger(void *opaque)
     m5208_timer_update(s);
 }
 
-typedef struct {
-    m5208_timer_state timer[2];
-} m5208_sys_state;
-
-static uint32_t m5208_sys_read(void *opaque, target_phys_addr_t addr)
+static uint64_t m5208_timer_read(void *opaque, target_phys_addr_t addr,
+                                 unsigned size)
 {
-    m5208_sys_state *s = (m5208_sys_state *)opaque;
+    m5208_timer_state *s = (m5208_timer_state *)opaque;
     switch (addr) {
-    /* PIT0 */
-    case 0xfc080000:
-        return s->timer[0].pcsr;
-    case 0xfc080002:
-        return s->timer[0].pmr;
-    case 0xfc080004:
-        return ptimer_get_count(s->timer[0].timer);
-    /* PIT1 */
-    case 0xfc084000:
-        return s->timer[1].pcsr;
-    case 0xfc084002:
-        return s->timer[1].pmr;
-    case 0xfc084004:
-        return ptimer_get_count(s->timer[1].timer);
+    case 0:
+        return s->pcsr;
+    case 2:
+        return s->pmr;
+    case 4:
+        return ptimer_get_count(s->timer);
+    default:
+        hw_error("m5208_timer_read: Bad offset 0x%x\n", (int)addr);
+        return 0;
+    }
+}
 
-    /* SDRAM Controller.  */
-    case 0xfc0a8110: /* SDCS0 */
+static const MemoryRegionOps m5208_timer_ops = {
+    .read = m5208_timer_read,
+    .write = m5208_timer_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+};
+
+static uint64_t m5208_sys_read(void *opaque, target_phys_addr_t addr,
+                               unsigned size)
+{
+    switch (addr) {
+    case 0x110: /* SDCS0 */
         {
             int n;
             for (n = 0; n < 32; n++) {
@@ -129,103 +142,83 @@ static uint32_t m5208_sys_read(void *opaque, target_phys_addr_t addr)
             }
             return (n - 1)  | 0x40000000;
         }
-    case 0xfc0a8114: /* SDCS1 */
+    case 0x114: /* SDCS1 */
         return 0;
 
     default:
-        cpu_abort(cpu_single_env, "m5208_sys_read: Bad offset 0x%x\n",
-                  (int)addr);
+        hw_error("m5208_sys_read: Bad offset 0x%x\n", (int)addr);
         return 0;
     }
 }
 
 static void m5208_sys_write(void *opaque, target_phys_addr_t addr,
-                            uint32_t value)
+                            uint64_t value, unsigned size)
 {
-    m5208_sys_state *s = (m5208_sys_state *)opaque;
-    switch (addr) {
-    /* PIT0 */
-    case 0xfc080000:
-    case 0xfc080002:
-    case 0xfc080004:
-        m5208_timer_write(&s->timer[0], addr & 0xf, value);
-        return;
-    /* PIT1 */
-    case 0xfc084000:
-    case 0xfc084002:
-    case 0xfc084004:
-        m5208_timer_write(&s->timer[1], addr & 0xf, value);
-        return;
-    default:
-        cpu_abort(cpu_single_env, "m5208_sys_write: Bad offset 0x%x\n",
-                  (int)addr);
-        break;
-    }
+    hw_error("m5208_sys_write: Bad offset 0x%x\n", (int)addr);
 }
 
-static CPUReadMemoryFunc *m5208_sys_readfn[] = {
-   m5208_sys_read,
-   m5208_sys_read,
-   m5208_sys_read
+static const MemoryRegionOps m5208_sys_ops = {
+    .read = m5208_sys_read,
+    .write = m5208_sys_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static CPUWriteMemoryFunc *m5208_sys_writefn[] = {
-   m5208_sys_write,
-   m5208_sys_write,
-   m5208_sys_write
-};
-
-static void mcf5208_sys_init(qemu_irq *pic)
+static void mcf5208_sys_init(MemoryRegion *address_space, qemu_irq *pic)
 {
-    int iomemtype;
-    m5208_sys_state *s;
+    MemoryRegion *iomem = g_new(MemoryRegion, 1);
+    m5208_timer_state *s;
     QEMUBH *bh;
     int i;
 
-    s = (m5208_sys_state *)qemu_mallocz(sizeof(m5208_sys_state));
-    iomemtype = cpu_register_io_memory(0, m5208_sys_readfn,
-                                       m5208_sys_writefn, s);
     /* SDRAMC.  */
-    cpu_register_physical_memory(0xfc0a8000, 0x00004000, iomemtype);
+    memory_region_init_io(iomem, &m5208_sys_ops, NULL, "m5208-sys", 0x00004000);
+    memory_region_add_subregion(address_space, 0xfc0a8000, iomem);
     /* Timers.  */
     for (i = 0; i < 2; i++) {
-        bh = qemu_bh_new(m5208_timer_trigger, &s->timer[i]);
-        s->timer[i].timer = ptimer_init(bh);
-        cpu_register_physical_memory(0xfc080000 + 0x4000 * i, 0x00004000,
-                                     iomemtype);
-        s->timer[i].irq = pic[4 + i];
+        s = (m5208_timer_state *)g_malloc0(sizeof(m5208_timer_state));
+        bh = qemu_bh_new(m5208_timer_trigger, s);
+        s->timer = ptimer_init(bh);
+        memory_region_init_io(&s->iomem, &m5208_timer_ops, s,
+                              "m5208-timer", 0x00004000);
+        memory_region_add_subregion(address_space, 0xfc080000 + 0x4000 * i,
+                                    &s->iomem);
+        s->irq = pic[4 + i];
     }
 }
 
-static void mcf5208evb_init(int ram_size, int vga_ram_size, int boot_device,
-                     DisplayState *ds, const char **fd_filename, int snapshot,
+static void mcf5208evb_init(ram_addr_t ram_size,
+                     const char *boot_device,
                      const char *kernel_filename, const char *kernel_cmdline,
                      const char *initrd_filename, const char *cpu_model)
 {
     CPUState *env;
     int kernel_size;
     uint64_t elf_entry;
-    target_ulong entry;
+    target_phys_addr_t entry;
     qemu_irq *pic;
+    MemoryRegion *address_space_mem = get_system_memory();
+    MemoryRegion *ram = g_new(MemoryRegion, 1);
+    MemoryRegion *sram = g_new(MemoryRegion, 1);
 
-    env = cpu_init();
     if (!cpu_model)
         cpu_model = "m5208";
-    if (cpu_m68k_set_model(env, cpu_model)) {
-        cpu_abort(env, "Unable to find m68k CPU definition\n");
+    env = cpu_init(cpu_model);
+    if (!env) {
+        fprintf(stderr, "Unable to find m68k CPU definition\n");
+        exit(1);
     }
 
     /* Initialize CPU registers.  */
     env->vbr = 0;
     /* TODO: Configure BARs.  */
 
-    /* DRAM at 0x20000000 */
-    cpu_register_physical_memory(0x40000000, ram_size,
-        qemu_ram_alloc(ram_size) | IO_MEM_RAM);
+    /* DRAM at 0x40000000 */
+    memory_region_init_ram(ram, NULL, "mcf5208.ram", ram_size);
+    memory_region_add_subregion(address_space_mem, 0x40000000, ram);
 
     /* Internal SRAM.  */
-    cpu_register_physical_memory(0x80000000, 16384,
-        qemu_ram_alloc(16384) | IO_MEM_RAM);
+    memory_region_init_ram(sram, NULL, "mcf5208.sram", 16384);
+    memory_region_add_subregion(address_space_mem, 0x80000000, sram);
 
     /* Internal peripherals.  */
     pic = mcf_intc_init(0xfc048000, env);
@@ -234,24 +227,14 @@ static void mcf5208evb_init(int ram_size, int vga_ram_size, int boot_device,
     mcf_uart_mm_init(0xfc064000, pic[27], serial_hds[1]);
     mcf_uart_mm_init(0xfc068000, pic[28], serial_hds[2]);
 
-    mcf5208_sys_init(pic);
+    mcf5208_sys_init(address_space_mem, pic);
 
     if (nb_nics > 1) {
         fprintf(stderr, "Too many NICs\n");
         exit(1);
     }
-    if (nd_table[0].vlan) {
-        if (nd_table[0].model == NULL
-            || strcmp(nd_table[0].model, "mcf_fec") == 0) {
-            mcf_fec_init(&nd_table[0], 0xfc030000, pic + 36);
-        } else if (strcmp(nd_table[0].model, "?") == 0) {
-            fprintf(stderr, "qemu: Supported NICs: mcf_fec\n");
-            exit (1);
-        } else {
-            fprintf(stderr, "qemu: Unsupported NIC: %s\n", nd_table[0].model);
-            exit (1);
-        }
-    }
+    if (nd_table[0].vlan)
+        mcf_fec_init(&nd_table[0], 0xfc030000, pic + 36);
 
     /*  0xfc000000 SCM.  */
     /*  0xfc004000 XBS.  */
@@ -281,14 +264,16 @@ static void mcf5208evb_init(int ram_size, int vga_ram_size, int boot_device,
         exit(1);
     }
 
-    kernel_size = load_elf(kernel_filename, 0, &elf_entry, NULL, NULL);
+    kernel_size = load_elf(kernel_filename, NULL, NULL, &elf_entry,
+                           NULL, NULL, 1, ELF_MACHINE, 0);
     entry = elf_entry;
     if (kernel_size < 0) {
-        kernel_size = load_uboot(kernel_filename, &entry, NULL);
+        kernel_size = load_uimage(kernel_filename, &entry, NULL, NULL);
     }
     if (kernel_size < 0) {
-        kernel_size = load_image(kernel_filename, phys_ram_base);
-        entry = 0x20000000;
+        kernel_size = load_image_targphys(kernel_filename, 0x40000000,
+                                          ram_size);
+        entry = 0x40000000;
     }
     if (kernel_size < 0) {
         fprintf(stderr, "qemu: could not load kernel '%s'\n", kernel_filename);
@@ -298,8 +283,16 @@ static void mcf5208evb_init(int ram_size, int vga_ram_size, int boot_device,
     env->pc = entry;
 }
 
-QEMUMachine mcf5208evb_machine = {
-    "mcf5208evb",
-    "MCF5206EVB",
-    mcf5208evb_init,
+static QEMUMachine mcf5208evb_machine = {
+    .name = "mcf5208evb",
+    .desc = "MCF5206EVB",
+    .init = mcf5208evb_init,
+    .is_default = 1,
 };
+
+static void mcf5208evb_machine_init(void)
+{
+    qemu_register_machine(&mcf5208evb_machine);
+}
+
+machine_init(mcf5208evb_machine_init);

@@ -1,13 +1,13 @@
-/* 
+/*
  * Arm PrimeCell PL080/PL081 DMA controller
  *
  * Copyright (c) 2006 CodeSourcery.
  * Written by Paul Brook
  *
- * This code is licenced under the GPL.
+ * This code is licensed under the GPL.
  */
 
-#include "vl.h"
+#include "sysbus.h"
 
 #define PL080_MAX_CHANNELS 8
 #define PL080_CONF_E    0x1
@@ -36,7 +36,7 @@ typedef struct {
 } pl080_channel;
 
 typedef struct {
-    uint32_t base;
+    SysBusDevice busdev;
     uint8_t tc_int;
     uint8_t tc_mask;
     uint8_t err_int;
@@ -51,6 +51,43 @@ typedef struct {
     int running;
     qemu_irq irq;
 } pl080_state;
+
+static const VMStateDescription vmstate_pl080_channel = {
+    .name = "pl080_channel",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (VMStateField[]) {
+        VMSTATE_UINT32(src, pl080_channel),
+        VMSTATE_UINT32(dest, pl080_channel),
+        VMSTATE_UINT32(lli, pl080_channel),
+        VMSTATE_UINT32(ctrl, pl080_channel),
+        VMSTATE_UINT32(conf, pl080_channel),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static const VMStateDescription vmstate_pl080 = {
+    .name = "pl080",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (VMStateField[]) {
+        VMSTATE_UINT8(tc_int, pl080_state),
+        VMSTATE_UINT8(tc_mask, pl080_state),
+        VMSTATE_UINT8(err_int, pl080_state),
+        VMSTATE_UINT8(err_mask, pl080_state),
+        VMSTATE_UINT32(conf, pl080_state),
+        VMSTATE_UINT32(sync, pl080_state),
+        VMSTATE_UINT32(req_single, pl080_state),
+        VMSTATE_UINT32(req_burst, pl080_state),
+        VMSTATE_UINT8(tc_int, pl080_state),
+        VMSTATE_UINT8(tc_int, pl080_state),
+        VMSTATE_UINT8(tc_int, pl080_state),
+        VMSTATE_STRUCT_ARRAY(chan, pl080_state, PL080_MAX_CHANNELS,
+                             1, vmstate_pl080_channel, pl080_channel),
+        VMSTATE_INT32(running, pl080_state),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static const unsigned char pl080_id[] =
 { 0x80, 0x10, 0x04, 0x0a, 0x0d, 0xf0, 0x05, 0xb1 };
@@ -79,7 +116,7 @@ static void pl080_run(pl080_state *s)
     int src_id;
     int dest_id;
     int size;
-    char buff[4];
+    uint8_t buff[4];
     uint32_t req;
 
     s->tc_mask = 0;
@@ -93,7 +130,7 @@ static void pl080_run(pl080_state *s)
     if ((s->conf & PL080_CONF_E) == 0)
         return;
 
-cpu_abort(cpu_single_env, "DMA active\n");
+hw_error("DMA active\n");
     /* If we are already in the middle of a DMA operation then indicate that
        there may be new DMA requests and return immediately.  */
     if (s->running) {
@@ -111,7 +148,7 @@ again:
                 continue;
             flow = (ch->conf >> 11) & 7;
             if (flow >= 4) {
-                cpu_abort(cpu_single_env, 
+                hw_error(
                     "pl080_run: Peripheral flow control not implemented\n");
             }
             src_id = (ch->conf >> 1) & 0x1f;
@@ -162,10 +199,10 @@ again:
             if (size == 0) {
                 /* Transfer complete.  */
                 if (ch->lli) {
-                    ch->src = ldl_phys(ch->lli);
-                    ch->dest = ldl_phys(ch->lli + 4);
-                    ch->ctrl = ldl_phys(ch->lli + 12);
-                    ch->lli = ldl_phys(ch->lli + 8);
+                    ch->src = ldl_le_phys(ch->lli);
+                    ch->dest = ldl_le_phys(ch->lli + 4);
+                    ch->ctrl = ldl_le_phys(ch->lli + 12);
+                    ch->lli = ldl_le_phys(ch->lli + 8);
                 } else {
                     ch->conf &= ~PL080_CCONF_E;
                 }
@@ -186,7 +223,6 @@ static uint32_t pl080_read(void *opaque, target_phys_addr_t offset)
     uint32_t i;
     uint32_t mask;
 
-    offset -= s->base;
     if (offset >= 0xfe0 && offset < 0x1000) {
         if (s->nchannels == 8) {
             return pl080_id[(offset - 0xfe0) >> 2];
@@ -243,7 +279,7 @@ static uint32_t pl080_read(void *opaque, target_phys_addr_t offset)
         return s->sync;
     default:
     bad_offset:
-        cpu_abort(cpu_single_env, "pl080_read: Bad offset %x\n", offset);
+        hw_error("pl080_read: Bad offset %x\n", (int)offset);
         return 0;
     }
 }
@@ -254,7 +290,6 @@ static void pl080_write(void *opaque, target_phys_addr_t offset,
     pl080_state *s = (pl080_state *)opaque;
     int i;
 
-    offset -= s->base;
     if (offset >= 0x100 && offset < 0x200) {
         i = (offset & 0xe0) >> 5;
         if (i >= s->nchannels)
@@ -290,13 +325,12 @@ static void pl080_write(void *opaque, target_phys_addr_t offset,
     case 10: /* SoftLBReq */
     case 11: /* SoftLSReq */
         /* ??? Implement these.  */
-        cpu_abort(cpu_single_env, "pl080_write: Soft DMA not implemented\n");
+        hw_error("pl080_write: Soft DMA not implemented\n");
         break;
     case 12: /* Configuration */
         s->conf = value;
         if (s->conf & (PL080_CONF_M1 | PL080_CONF_M1)) {
-            cpu_abort(cpu_single_env,
-                      "pl080_write: Big-endian DMA not implemented\n");
+            hw_error("pl080_write: Big-endian DMA not implemented\n");
         }
         pl080_run(s);
         break;
@@ -305,38 +339,69 @@ static void pl080_write(void *opaque, target_phys_addr_t offset,
         break;
     default:
     bad_offset:
-        cpu_abort(cpu_single_env, "pl080_write: Bad offset %x\n", offset);
+        hw_error("pl080_write: Bad offset %x\n", (int)offset);
     }
     pl080_update(s);
 }
 
-static CPUReadMemoryFunc *pl080_readfn[] = {
+static CPUReadMemoryFunc * const pl080_readfn[] = {
    pl080_read,
    pl080_read,
    pl080_read
 };
 
-static CPUWriteMemoryFunc *pl080_writefn[] = {
+static CPUWriteMemoryFunc * const pl080_writefn[] = {
    pl080_write,
    pl080_write,
    pl080_write
 };
 
-/* The PL080 and PL081 are the same except for the number of channels
-   they implement (8 and 2 respectively).  */
-void *pl080_init(uint32_t base, qemu_irq irq, int nchannels)
+static int pl08x_init(SysBusDevice *dev, int nchannels)
 {
     int iomemtype;
-    pl080_state *s;
+    pl080_state *s = FROM_SYSBUS(pl080_state, dev);
 
-    s = (pl080_state *)qemu_mallocz(sizeof(pl080_state));
-    iomemtype = cpu_register_io_memory(0, pl080_readfn,
-                                       pl080_writefn, s);
-    cpu_register_physical_memory(base, 0x00001000, iomemtype);
-    s->base = base;
-    s->irq = irq;
+    iomemtype = cpu_register_io_memory(pl080_readfn,
+                                       pl080_writefn, s,
+                                       DEVICE_NATIVE_ENDIAN);
+    sysbus_init_mmio(dev, 0x1000, iomemtype);
+    sysbus_init_irq(dev, &s->irq);
     s->nchannels = nchannels;
-    /* ??? Save/restore.  */
-    return s;
+    return 0;
 }
 
+static int pl080_init(SysBusDevice *dev)
+{
+    return pl08x_init(dev, 8);
+}
+
+static int pl081_init(SysBusDevice *dev)
+{
+    return pl08x_init(dev, 2);
+}
+
+static SysBusDeviceInfo pl080_info = {
+    .init = pl080_init,
+    .qdev.name = "pl080",
+    .qdev.size = sizeof(pl080_state),
+    .qdev.vmsd = &vmstate_pl080,
+    .qdev.no_user = 1,
+};
+
+static SysBusDeviceInfo pl081_info = {
+    .init = pl081_init,
+    .qdev.name = "pl081",
+    .qdev.size = sizeof(pl080_state),
+    .qdev.vmsd = &vmstate_pl080,
+    .qdev.no_user = 1,
+};
+
+/* The PL080 and PL081 are the same except for the number of channels
+   they implement (8 and 2 respectively).  */
+static void pl080_register_devices(void)
+{
+    sysbus_register_withprop(&pl080_info);
+    sysbus_register_withprop(&pl081_info);
+}
+
+device_init(pl080_register_devices)

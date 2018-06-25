@@ -14,22 +14,19 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef EEPROM93XX_H
 #define EEPROM93XX_H
 
-#include "vl.h"
-
 typedef struct _eeprom_t eeprom_t;
 
 /* Create a new EEPROM with (nwords * 2) bytes. */
-eeprom_t *eeprom93xx_new(uint16_t nwords);
+eeprom_t *eeprom93xx_new(DeviceState *dev, uint16_t nwords);
 
 /* Destroy an existing EEPROM. */
-void eeprom93xx_free(eeprom_t *eeprom);
+void eeprom93xx_free(DeviceState *dev, eeprom_t *eeprom);
 
 /* Read from the EEPROM. */
 uint16_t eeprom93xx_read(eeprom_t *eeprom);

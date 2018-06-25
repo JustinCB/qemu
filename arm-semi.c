@@ -1,6 +1,6 @@
 /*
  *  Arm "Angel" semihosting syscalls
- * 
+ *
  *  Copyright (c) 2005, 2007 CodeSourcery.
  *  Written by Paul Brook.
  *
@@ -15,8 +15,7 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <sys/types.h>
@@ -33,7 +32,9 @@
 
 #define ARM_ANGEL_HEAP_SIZE (128 * 1024 * 1024)
 #else
-#include "vl.h"
+#include "qemu-common.h"
+#include "gdbstub.h"
+#include "hw/arm-misc.h"
 #endif
 
 #define SYS_OPEN        0x01
@@ -165,8 +166,14 @@ static void arm_semi_flen_cb(CPUState *env, target_ulong ret, target_ulong err)
 #endif
 }
 
-#define ARG(n) tget32(args + (n) * 4)
-#define SET_ARG(n, val) tput32(args + (n) * 4,val)
+#define ARG(n)					\
+({						\
+    target_ulong __arg;				\
+    /* FIXME - handle get_user() failure */	\
+    get_user_ual(__arg, args + (n) * 4);	\
+    __arg;					\
+})
+#define SET_ARG(n, val) put_user_ual(val, args + (n) * 4)
 uint32_t do_arm_semihosting(CPUState *env)
 {
     target_ulong args;
@@ -184,9 +191,11 @@ uint32_t do_arm_semihosting(CPUState *env)
     args = env->regs[1];
     switch (nr) {
     case SYS_OPEN:
-        s = lock_user_string(ARG(0));
+        if (!(s = lock_user_string(ARG(0))))
+            /* FIXME - should this error code be -TARGET_EFAULT ? */
+            return (uint32_t)-1;
         if (ARG(1) >= 12)
-          return (uint32_t)-1;
+            return (uint32_t)-1;
         if (strcmp(s, ":tt") == 0) {
             if (ARG(1) < 4)
                 return STDIN_FILENO;
@@ -194,7 +203,7 @@ uint32_t do_arm_semihosting(CPUState *env)
                 return STDOUT_FILENO;
         }
         if (use_gdb_syscalls()) {
-            gdb_do_syscall(arm_semi_cb, "open,%s,%x,1a4", ARG(0), 
+            gdb_do_syscall(arm_semi_cb, "open,%s,%x,1a4", ARG(0),
 			   (int)ARG(2)+1, gdb_open_modeflags[ARG(1)]);
             return env->regs[0];
         } else {
@@ -211,7 +220,11 @@ uint32_t do_arm_semihosting(CPUState *env)
         }
     case SYS_WRITEC:
         {
-          char c = tget8(args);
+          char c;
+
+          if (get_user_u8(c, args))
+              /* FIXME - should this error code be -TARGET_EFAULT ? */
+              return (uint32_t)-1;
           /* Write to debug console.  stderr is near enough.  */
           if (use_gdb_syscalls()) {
                 gdb_do_syscall(arm_semi_cb, "write,2,%x,1", args);
@@ -221,7 +234,9 @@ uint32_t do_arm_semihosting(CPUState *env)
           }
         }
     case SYS_WRITE0:
-        s = lock_user_string(args);
+        if (!(s = lock_user_string(args)))
+            /* FIXME - should this error code be -TARGET_EFAULT ? */
+            return (uint32_t)-1;
         len = strlen(s);
         if (use_gdb_syscalls()) {
             gdb_do_syscall(arm_semi_cb, "write,2,%x,%x\n", args, len);
@@ -238,7 +253,9 @@ uint32_t do_arm_semihosting(CPUState *env)
             gdb_do_syscall(arm_semi_cb, "write,%x,%x,%x", ARG(0), ARG(1), len);
             return env->regs[0];
         } else {
-            s = lock_user(ARG(1), len, 1);
+            if (!(s = lock_user(VERIFY_READ, ARG(1), len, 1)))
+                /* FIXME - should this error code be -TARGET_EFAULT ? */
+                return (uint32_t)-1;
             ret = set_swi_errno(ts, write(ARG(0), s, len));
             unlock_user(s, ARG(1), 0);
             if (ret == (uint32_t)-1)
@@ -252,7 +269,9 @@ uint32_t do_arm_semihosting(CPUState *env)
             gdb_do_syscall(arm_semi_cb, "read,%x,%x,%x", ARG(0), ARG(1), len);
             return env->regs[0];
         } else {
-            s = lock_user(ARG(1), len, 0);
+            if (!(s = lock_user(VERIFY_WRITE, ARG(1), len, 0)))
+                /* FIXME - should this error code be -TARGET_EFAULT ? */
+                return (uint32_t)-1;
             do
               ret = set_swi_errno(ts, read(ARG(0), s, len));
             while (ret == -1 && errno == EINTR);
@@ -283,7 +302,7 @@ uint32_t do_arm_semihosting(CPUState *env)
         }
     case SYS_FLEN:
         if (use_gdb_syscalls()) {
-            gdb_do_syscall(arm_semi_flen_cb, "fstat,%x,%x", 
+            gdb_do_syscall(arm_semi_flen_cb, "fstat,%x,%x",
 			   ARG(0), env->regs[13]-64);
             return env->regs[0];
         } else {
@@ -301,7 +320,9 @@ uint32_t do_arm_semihosting(CPUState *env)
             gdb_do_syscall(arm_semi_cb, "unlink,%s", ARG(0), (int)ARG(1)+1);
             ret = env->regs[0];
         } else {
-            s = lock_user_string(ARG(0));
+            if (!(s = lock_user_string(ARG(0))))
+                /* FIXME - should this error code be -TARGET_EFAULT ? */
+                return (uint32_t)-1;
             ret =  set_swi_errno(ts, remove(s));
             unlock_user(s, ARG(0), 0);
         }
@@ -315,9 +336,15 @@ uint32_t do_arm_semihosting(CPUState *env)
             char *s2;
             s = lock_user_string(ARG(0));
             s2 = lock_user_string(ARG(2));
-            ret = set_swi_errno(ts, rename(s, s2));
-            unlock_user(s2, ARG(2), 0);
-            unlock_user(s, ARG(0), 0);
+            if (!s || !s2)
+                /* FIXME - should this error code be -TARGET_EFAULT ? */
+                ret = (uint32_t)-1;
+            else
+                ret = set_swi_errno(ts, rename(s, s2));
+            if (s2)
+                unlock_user(s2, ARG(2), 0);
+            if (s)
+                unlock_user(s, ARG(0), 0);
             return ret;
         }
     case SYS_CLOCK:
@@ -329,9 +356,12 @@ uint32_t do_arm_semihosting(CPUState *env)
             gdb_do_syscall(arm_semi_cb, "system,%s", ARG(0), (int)ARG(1)+1);
             return env->regs[0];
         } else {
-            s = lock_user_string(ARG(0));
+            if (!(s = lock_user_string(ARG(0))))
+                /* FIXME - should this error code be -TARGET_EFAULT ? */
+                return (uint32_t)-1;
             ret = set_swi_errno(ts, system(s));
             unlock_user(s, ARG(0), 0);
+            return ret;
         }
     case SYS_ERRNO:
 #ifdef CONFIG_USER_ONLY
@@ -340,45 +370,88 @@ uint32_t do_arm_semihosting(CPUState *env)
         return syscall_err;
 #endif
     case SYS_GET_CMDLINE:
-#ifdef CONFIG_USER_ONLY
-        /* Build a commandline from the original argv.  */
         {
-            char **arg = ts->info->host_argv;
-            int len = ARG(1);
-            /* lock the buffer on the ARM side */
-            char *cmdline_buffer = (char*)lock_user(ARG(0), len, 0);
+            /* Build a command-line from the original argv.
+             *
+             * The inputs are:
+             *     * ARG(0), pointer to a buffer of at least the size
+             *               specified in ARG(1).
+             *     * ARG(1), size of the buffer pointed to by ARG(0) in
+             *               bytes.
+             *
+             * The outputs are:
+             *     * ARG(0), pointer to null-terminated string of the
+             *               command line.
+             *     * ARG(1), length of the string pointed to by ARG(0).
+             */
 
-            s = cmdline_buffer;
-            while (*arg && len > 2) {
-                int n = strlen(*arg);
+            char *output_buffer;
+            size_t input_size = ARG(1);
+            size_t output_size;
+            int status = 0;
 
-                if (s != cmdline_buffer) {
-                    *(s++) = ' ';
-                    len--;
-                }
-                if (n >= len)
-                    n = len - 1;
-                memcpy(s, *arg, n);
-                s += n;
-                len -= n;
-                arg++;
-            }
-            /* Null terminate the string.  */
-            *s = 0;
-            len = s - cmdline_buffer;
-
-            /* Unlock the buffer on the ARM side.  */
-            unlock_user(cmdline_buffer, ARG(0), len);
-
-            /* Adjust the commandline length argument.  */
-            SET_ARG(1, len);
-
-            /* Return success if commandline fit into buffer.  */
-            return *arg ? -1 : 0;
-        }
+            /* Compute the size of the output string.  */
+#if !defined(CONFIG_USER_ONLY)
+            output_size = strlen(ts->boot_info->kernel_filename)
+                        + 1  /* Separating space.  */
+                        + strlen(ts->boot_info->kernel_cmdline)
+                        + 1; /* Terminating null byte.  */
 #else
-      return -1;
+            unsigned int i;
+
+            output_size = ts->info->arg_end - ts->info->arg_start;
+            if (!output_size) {
+                /* We special-case the "empty command line" case (argc==0).
+                   Just provide the terminating 0. */
+                output_size = 1;
+            }
 #endif
+
+            if (output_size > input_size) {
+                 /* Not enough space to store command-line arguments.  */
+                return -1;
+            }
+
+            /* Adjust the command-line length.  */
+            SET_ARG(1, output_size - 1);
+
+            /* Lock the buffer on the ARM side.  */
+            output_buffer = lock_user(VERIFY_WRITE, ARG(0), output_size, 0);
+            if (!output_buffer) {
+                return -1;
+            }
+
+            /* Copy the command-line arguments.  */
+#if !defined(CONFIG_USER_ONLY)
+            pstrcpy(output_buffer, output_size, ts->boot_info->kernel_filename);
+            pstrcat(output_buffer, output_size, " ");
+            pstrcat(output_buffer, output_size, ts->boot_info->kernel_cmdline);
+#else
+            if (output_size == 1) {
+                /* Empty command-line.  */
+                output_buffer[0] = '\0';
+                goto out;
+            }
+
+            if (copy_from_user(output_buffer, ts->info->arg_start,
+                               output_size)) {
+                status = -1;
+                goto out;
+            }
+
+            /* Separate arguments by white spaces.  */
+            for (i = 0; i < output_size - 1; i++) {
+                if (output_buffer[i] == 0) {
+                    output_buffer[i] = ' ';
+                }
+            }
+        out:
+#endif
+            /* Unlock the buffer on the ARM side.  */
+            unlock_user(output_buffer, ARG(0), output_size);
+
+            return status;
+        }
     case SYS_HEAPINFO:
         {
             uint32_t *ptr;
@@ -388,21 +461,24 @@ uint32_t do_arm_semihosting(CPUState *env)
             /* Some C libraries assume the heap immediately follows .bss, so
                allocate it using sbrk.  */
             if (!ts->heap_limit) {
-                long ret;
+                abi_ulong ret;
 
                 ts->heap_base = do_brk(0);
                 limit = ts->heap_base + ARM_ANGEL_HEAP_SIZE;
                 /* Try a big heap, and reduce the size if that fails.  */
                 for (;;) {
                     ret = do_brk(limit);
-                    if (ret != -1)
+                    if (ret >= limit) {
                         break;
+                    }
                     limit = (ts->heap_base >> 1) + (limit >> 1);
                 }
                 ts->heap_limit = limit;
             }
-              
-            ptr = lock_user(ARG(0), 16, 0);
+
+            if (!(ptr = lock_user(VERIFY_WRITE, ARG(0), 16, 0)))
+                /* FIXME - should this error code be -TARGET_EFAULT ? */
+                return (uint32_t)-1;
             ptr[0] = tswap32(ts->heap_base);
             ptr[1] = tswap32(ts->heap_limit);
             ptr[2] = tswap32(ts->stack_base);
@@ -410,7 +486,9 @@ uint32_t do_arm_semihosting(CPUState *env)
             unlock_user(ptr, ARG(0), 16);
 #else
             limit = ram_size;
-            ptr = lock_user(ARG(0), 16, 0);
+            if (!(ptr = lock_user(VERIFY_WRITE, ARG(0), 16, 0)))
+                /* FIXME - should this error code be -TARGET_EFAULT ? */
+                return (uint32_t)-1;
             /* TODO: Make this use the limit of the loaded application.  */
             ptr[0] = tswap32(limit / 2);
             ptr[1] = tswap32(limit);
@@ -421,6 +499,7 @@ uint32_t do_arm_semihosting(CPUState *env)
             return 0;
         }
     case SYS_EXIT:
+        gdb_exit(env, 0);
         exit(0);
     default:
         fprintf(stderr, "qemu: Unsupported SemiHosting SWI 0x%02x\n", nr);

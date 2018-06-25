@@ -2,9 +2,6 @@
  * User definable configuration options
  */
 
-/* Undefine if you don't want talk emulation */
-#undef EMULATE_TALK
-
 /* Define if you want the connection to be probed */
 /* XXX Not working yet, so ignore this for now */
 #undef PROBE_CONN
@@ -86,10 +83,7 @@
 #undef HAVE_SYS_BITYPES_H
 
 /* Define if the machine is big endian */
-//#undef WORDS_BIGENDIAN
-
-/* Define if your sprintf returns char * instead of int */
-#undef BAD_SPRINTF
+//#undef HOST_WORDS_BIGENDIAN
 
 /* Define if you have readv */
 #undef HAVE_READV
@@ -99,9 +93,6 @@
 #ifdef _WIN32
 #define DECLARE_IOVEC
 #endif
-
-/* Define if a declaration of sprintf/fprintf is needed */
-#undef DECLARE_SPRINTF
 
 /* Define if you have a POSIX.1 sys/wait.h */
 #undef HAVE_SYS_WAIT_H
@@ -128,19 +119,13 @@
 #undef HAVE_SYS_STROPTS_H
 
 /* Define to whatever your compiler thinks inline should be */
-#define inline inline
+//#define inline inline
 
 /* Define to whatever your compiler thinks const should be */
-#define const const
+//#define const const
 
 /* Define if your compiler doesn't like prototypes */
 #undef NO_PROTOTYPES
-
-/* Define if you don't have u_int32_t etc. typedef'd */
-#undef NEED_TYPEDEFS
-#ifdef __sun__
-#define NEED_TYPEDEFS
-#endif
 
 /* Define to sizeof(char) */
 #define SIZEOF_CHAR 1
@@ -170,7 +155,7 @@
 #undef HAVE_SETENV
 
 /* Define if you have index() */
-#undef HAVE_INDEX
+#define HAVE_INDEX
 
 /* Define if you have bcmp() */
 #undef HAVE_BCMP
@@ -182,16 +167,13 @@
 #define HAVE_MEMMOVE
 
 /* Define if you have gethostid */
-#undef HAVE_GETHOSTID
+#define HAVE_GETHOSTID
 
 /* Define if you DON'T have unix-domain sockets */
 #undef NO_UNIX_SOCKETS
 #ifdef _WIN32
 #define NO_UNIX_SOCKETS
 #endif
-
-/* Define if gettimeofday only takes one argument */
-#undef GETTIMEOFDAY_ONE_ARG
 
 /* Define if you have revoke() */
 #undef HAVE_REVOKE

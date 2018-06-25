@@ -23,16 +23,20 @@
  */
 #ifdef DSBTYPE_IN
 #define NAME "capture buffer"
+#define NAME2 "DirectSoundCapture"
 #define TYPE in
 #define IFACE IDirectSoundCaptureBuffer
 #define BUFPTR LPDIRECTSOUNDCAPTUREBUFFER
 #define FIELD dsound_capture_buffer
+#define FIELD2 dsound_capture
 #else
 #define NAME "playback buffer"
+#define NAME2 "DirectSound"
 #define TYPE out
 #define IFACE IDirectSoundBuffer
 #define BUFPTR LPDIRECTSOUNDBUFFER
 #define FIELD dsound_buffer
+#define FIELD2 dsound
 #endif
 
 static int glue (dsound_unlock_, TYPE) (
@@ -170,16 +174,16 @@ static void dsound_fini_out (HWVoiceOut *hw)
 }
 
 #ifdef DSBTYPE_IN
-static int dsound_init_in (HWVoiceIn *hw, audsettings_t *as)
+static int dsound_init_in (HWVoiceIn *hw, struct audsettings *as)
 #else
-static int dsound_init_out (HWVoiceOut *hw, audsettings_t *as)
+static int dsound_init_out (HWVoiceOut *hw, struct audsettings *as)
 #endif
 {
     int err;
     HRESULT hr;
     dsound *s = &glob_dsound;
     WAVEFORMATEX wfx;
-    audsettings_t obt_as;
+    struct audsettings obt_as;
 #ifdef DSBTYPE_IN
     const char *typ = "ADC";
     DSoundVoiceIn *ds = (DSoundVoiceIn *) hw;
@@ -191,6 +195,11 @@ static int dsound_init_out (HWVoiceOut *hw, audsettings_t *as)
     DSBUFFERDESC bd;
     DSBCAPS bc;
 #endif
+
+    if (!s->FIELD2) {
+        dolog ("Attempt to initialize voice without " NAME2 " object\n");
+        return -1;
+    }
 
     err = waveformat_from_audio_settings (&wfx, as);
     if (err) {
@@ -276,7 +285,9 @@ static int dsound_init_out (HWVoiceOut *hw, audsettings_t *as)
 }
 
 #undef NAME
+#undef NAME2
 #undef TYPE
 #undef IFACE
 #undef BUFPTR
 #undef FIELD
+#undef FIELD2

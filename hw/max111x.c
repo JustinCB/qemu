@@ -7,16 +7,17 @@
  * This code is licensed under the GNU GPLv2.
  */
 
-#include <vl.h>
+#include "ssi.h"
 
-struct max111x_s {
+typedef struct {
+    SSISlave ssidev;
     qemu_irq interrupt;
     uint8_t tb1, rb2, rb3;
     int cycle;
 
-    int input[8];
+    uint8_t input[8];
     int inputs, com;
-};
+} MAX111xState;
 
 /* Control-byte bitfields */
 #define CB_PD0		(1 << 0)
@@ -33,10 +34,8 @@ struct max111x_s {
 			 (((v) >> (3 + (b1))) & 2) |	\
 			 (((v) >> (4 + (b2))) & 1))
 
-uint32_t max111x_read(void *opaque)
+static uint32_t max111x_read(MAX111xState *s)
 {
-    struct max111x_s *s = (struct max111x_s *) opaque;
-
     if (!s->tb1)
         return 0;
 
@@ -51,9 +50,8 @@ uint32_t max111x_read(void *opaque)
 }
 
 /* Interpret a control-byte */
-void max111x_write(void *opaque, uint32_t value)
+static void max111x_write(MAX111xState *s, uint32_t value)
 {
-    struct max111x_s *s = (struct max111x_s *) opaque;
     int measure, chan;
 
     /* Ignore the value if START bit is zero */
@@ -85,52 +83,41 @@ void max111x_write(void *opaque, uint32_t value)
     s->rb2 = (measure >> 2) & 0x3f;
     s->rb3 = (measure << 6) & 0xc0;
 
-    if (s->interrupt)
-        qemu_irq_raise(s->interrupt);
+    /* FIXME: When should the IRQ be lowered?  */
+    qemu_irq_raise(s->interrupt);
 }
 
-static void max111x_save(QEMUFile *f, void *opaque)
+static uint32_t max111x_transfer(SSISlave *dev, uint32_t value)
 {
-    struct max111x_s *s = (struct max111x_s *) opaque;
-    int i;
-
-    qemu_put_8s(f, &s->tb1);
-    qemu_put_8s(f, &s->rb2);
-    qemu_put_8s(f, &s->rb3);
-    qemu_put_be32(f, s->inputs);
-    qemu_put_be32(f, s->com);
-    for (i = 0; i < s->inputs; i ++)
-        qemu_put_byte(f, s->input[i]);
+    MAX111xState *s = FROM_SSI_SLAVE(MAX111xState, dev);
+    max111x_write(s, value);
+    return max111x_read(s);
 }
 
-static int max111x_load(QEMUFile *f, void *opaque, int version_id)
+static const VMStateDescription vmstate_max111x = {
+    .name = "max111x",
+    .version_id = 0,
+    .minimum_version_id = 0,
+    .minimum_version_id_old = 0,
+    .fields      = (VMStateField[]) {
+        VMSTATE_UINT8(tb1, MAX111xState),
+        VMSTATE_UINT8(rb2, MAX111xState),
+        VMSTATE_UINT8(rb3, MAX111xState),
+        VMSTATE_INT32_EQUAL(inputs, MAX111xState),
+        VMSTATE_INT32(com, MAX111xState),
+        VMSTATE_ARRAY_INT32_UNSAFE(input, MAX111xState, inputs,
+                                   vmstate_info_uint8, uint8_t),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static int max111x_init(SSISlave *dev, int inputs)
 {
-    struct max111x_s *s = (struct max111x_s *) opaque;
-    int i;
+    MAX111xState *s = FROM_SSI_SLAVE(MAX111xState, dev);
 
-    qemu_get_8s(f, &s->tb1);
-    qemu_get_8s(f, &s->rb2);
-    qemu_get_8s(f, &s->rb3);
-    if (s->inputs != qemu_get_be32(f))
-        return -EINVAL;
-    s->com = qemu_get_be32(f);
-    for (i = 0; i < s->inputs; i ++)
-        s->input[i] = qemu_get_byte(f);
+    qdev_init_gpio_out(&dev->qdev, &s->interrupt, 1);
 
-    return 0;
-}
-
-static int max111x_iid = 0;
-
-static struct max111x_s *max111x_init(qemu_irq cb)
-{
-    struct max111x_s *s;
-    s = (struct max111x_s *)
-            qemu_mallocz(sizeof(struct max111x_s));
-    memset(s, 0, sizeof(struct max111x_s));
-
-    s->interrupt = cb;
-
+    s->inputs = inputs;
     /* TODO: add a user interface for setting these */
     s->input[0] = 0xf0;
     s->input[1] = 0xe0;
@@ -142,32 +129,45 @@ static struct max111x_s *max111x_init(qemu_irq cb)
     s->input[7] = 0x80;
     s->com = 0;
 
-    register_savevm("max111x", max111x_iid ++, 0,
-                    max111x_save, max111x_load, s);
-
-    return s;
+    vmstate_register(&dev->qdev, -1, &vmstate_max111x, s);
+    return 0;
 }
 
-struct max111x_s *max1110_init(qemu_irq cb)
+static int max1110_init(SSISlave *dev)
 {
-    struct max111x_s *s = max111x_init(cb);
-    s->inputs = 8;
-    return s;
+    return max111x_init(dev, 8);
 }
 
-struct max111x_s *max1111_init(qemu_irq cb)
+static int max1111_init(SSISlave *dev)
 {
-    struct max111x_s *s = max111x_init(cb);
-    s->inputs = 4;
-    return s;
+    return max111x_init(dev, 4);
 }
 
-void max111x_set_input(struct max111x_s *s, int line, uint8_t value)
+void max111x_set_input(DeviceState *dev, int line, uint8_t value)
 {
-    if (line >= s->inputs) {
-        printf("%s: There's no input %i\n", __FUNCTION__, line);
-        return;
-    }
-
+    MAX111xState *s = FROM_SSI_SLAVE(MAX111xState, SSI_SLAVE_FROM_QDEV(dev));
+    assert(line >= 0 && line < s->inputs);
     s->input[line] = value;
 }
+
+static SSISlaveInfo max1110_info = {
+    .qdev.name = "max1110",
+    .qdev.size = sizeof(MAX111xState),
+    .init = max1110_init,
+    .transfer = max111x_transfer
+};
+
+static SSISlaveInfo max1111_info = {
+    .qdev.name = "max1111",
+    .qdev.size = sizeof(MAX111xState),
+    .init = max1111_init,
+    .transfer = max111x_transfer
+};
+
+static void max111x_register_devices(void)
+{
+    ssi_register_slave(&max1110_info);
+    ssi_register_slave(&max1111_info);
+}
+
+device_init(max111x_register_devices)

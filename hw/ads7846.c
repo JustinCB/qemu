@@ -1,5 +1,5 @@
 /*
- * TI ADS7846 chip emulation.
+ * TI ADS7846 / TSC2046 chip emulation.
  *
  * Copyright (c) 2006 Openedhand Ltd.
  * Written by Andrzej Zaborowski <balrog@zabor.org>
@@ -7,9 +7,11 @@
  * This code is licensed under the GNU GPL v2.
  */
 
-#include <vl.h>
+#include "ssi.h"
+#include "console.h"
 
-struct ads7846_state_s {
+typedef struct {
+    SSISlave ssidev;
     qemu_irq interrupt;
 
     int input[8];
@@ -18,7 +20,7 @@ struct ads7846_state_s {
 
     int cycle;
     int output;
-};
+} ADS7846State;
 
 /* Control-byte bitfields */
 #define CB_PD0		(1 << 0)
@@ -30,10 +32,10 @@ struct ads7846_state_s {
 #define CB_A2		(1 << 6)
 #define CB_START	(1 << 7)
 
-#define X_AXIS_DMAX	3680
-#define X_AXIS_MIN	150
-#define Y_AXIS_DMAX	3640
-#define Y_AXIS_MIN	190
+#define X_AXIS_DMAX	3470
+#define X_AXIS_MIN	290
+#define Y_AXIS_DMAX	3450
+#define Y_AXIS_MIN	200
 
 #define ADS_VBAT	2000
 #define ADS_VAUX	2000
@@ -44,22 +46,15 @@ struct ads7846_state_s {
 #define ADS_Z1POS(x, y)	600
 #define ADS_Z2POS(x, y)	(600 + 6000 / ADS_XPOS(x, y))
 
-static void ads7846_int_update(struct ads7846_state_s *s)
+static void ads7846_int_update(ADS7846State *s)
 {
     if (s->interrupt)
         qemu_set_irq(s->interrupt, s->pressure == 0);
 }
 
-uint32_t ads7846_read(void *opaque)
+static uint32_t ads7846_transfer(SSISlave *dev, uint32_t value)
 {
-    struct ads7846_state_s *s = (struct ads7846_state_s *) opaque;
-
-    return s->output;
-}
-
-void ads7846_write(void *opaque, uint32_t value)
-{
-    struct ads7846_state_s *s = (struct ads7846_state_s *) opaque;
+    ADS7846State *s = FROM_SSI_SLAVE(ADS7846State, dev);
 
     switch (s->cycle ++) {
     case 0:
@@ -87,18 +82,20 @@ void ads7846_write(void *opaque, uint32_t value)
         s->cycle = 0;
         break;
     }
+    return s->output;
 }
 
 static void ads7846_ts_event(void *opaque,
                 int x, int y, int z, int buttons_state)
 {
-    struct ads7846_state_s *s = opaque;
+    ADS7846State *s = opaque;
 
     if (buttons_state) {
-        s->input[1] = ADS_YPOS(x, y);
+        x = 0x7fff - x;
+        s->input[1] = ADS_XPOS(x, y);
         s->input[3] = ADS_Z1POS(x, y);
         s->input[4] = ADS_Z2POS(x, y);
-        s->input[5] = ADS_XPOS(x, y);
+        s->input[5] = ADS_YPOS(x, y);
     }
 
     if (s->pressure == !buttons_state) {
@@ -108,45 +105,35 @@ static void ads7846_ts_event(void *opaque,
     }
 }
 
-static void ads7846_save(QEMUFile *f, void *opaque)
+static int ads7856_post_load(void *opaque, int version_id)
 {
-    struct ads7846_state_s *s = (struct ads7846_state_s *) opaque;
-    int i;
-
-    for (i = 0; i < 8; i ++)
-        qemu_put_be32(f, s->input[i]);
-    qemu_put_be32(f, s->noise);
-    qemu_put_be32(f, s->cycle);
-    qemu_put_be32(f, s->output);
-}
-
-static int ads7846_load(QEMUFile *f, void *opaque, int version_id)
-{
-    struct ads7846_state_s *s = (struct ads7846_state_s *) opaque;
-    int i;
-
-    for (i = 0; i < 8; i ++)
-        s->input[i] = qemu_get_be32(f);
-    s->noise = qemu_get_be32(f);
-    s->cycle = qemu_get_be32(f);
-    s->output = qemu_get_be32(f);
+    ADS7846State *s = opaque;
 
     s->pressure = 0;
     ads7846_int_update(s);
-
     return 0;
 }
 
-static int ads7846_iid = 0;
+static const VMStateDescription vmstate_ads7846 = {
+    .name = "ads7846",
+    .version_id = 0,
+    .minimum_version_id = 0,
+    .minimum_version_id_old = 0,
+    .post_load = ads7856_post_load,
+    .fields      = (VMStateField[]) {
+        VMSTATE_INT32_ARRAY(input, ADS7846State, 8),
+        VMSTATE_INT32(noise, ADS7846State),
+        VMSTATE_INT32(cycle, ADS7846State),
+        VMSTATE_INT32(output, ADS7846State),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
-struct ads7846_state_s *ads7846_init(qemu_irq penirq)
+static int ads7846_init(SSISlave *dev)
 {
-    struct ads7846_state_s *s;
-    s = (struct ads7846_state_s *)
-            qemu_mallocz(sizeof(struct ads7846_state_s));
-    memset(s, 0, sizeof(struct ads7846_state_s));
+    ADS7846State *s = FROM_SSI_SLAVE(ADS7846State, dev);
 
-    s->interrupt = penirq;
+    qdev_init_gpio_out(&dev->qdev, &s->interrupt, 1);
 
     s->input[0] = ADS_TEMP0;	/* TEMP0 */
     s->input[2] = ADS_VBAT;	/* VBAT */
@@ -159,8 +146,20 @@ struct ads7846_state_s *ads7846_init(qemu_irq penirq)
 
     ads7846_int_update(s);
 
-    register_savevm("ads7846", ads7846_iid ++, 0,
-                    ads7846_save, ads7846_load, s);
-
-    return s;
+    vmstate_register(NULL, -1, &vmstate_ads7846, s);
+    return 0;
 }
+
+static SSISlaveInfo ads7846_info = {
+    .qdev.name ="ads7846",
+    .qdev.size = sizeof(ADS7846State),
+    .init = ads7846_init,
+    .transfer = ads7846_transfer
+};
+
+static void ads7846_register_devices(void)
+{
+    ssi_register_slave(&ads7846_info);
+}
+
+device_init(ads7846_register_devices)

@@ -22,7 +22,11 @@
  * THE SOFTWARE.
  */
 
-#include "vl.h"
+#include "hw.h"
+#include "pc.h"
+#include "isa.h"
+#include "audio/audio.h"
+#include "qemu-timer.h"
 
 #define PCSPK_BUF_LEN 1792
 #define PCSPK_SAMPLE_RATE 32000
@@ -33,7 +37,7 @@ typedef struct {
     uint8_t sample_buf[PCSPK_BUF_LEN];
     QEMUSoundCard card;
     SWVoiceOut *voice;
-    PITState *pit;
+    ISADevice *pit;
     unsigned int pit_count;
     unsigned int samples;
     unsigned int play_pos;
@@ -92,16 +96,12 @@ static void pcspk_callback(void *opaque, int free)
     }
 }
 
-int pcspk_audio_init(AudioState *audio, qemu_irq *pic)
+int pcspk_audio_init(qemu_irq *pic)
 {
     PCSpkState *s = &pcspk_state;
-    audsettings_t as = {PCSPK_SAMPLE_RATE, 1, AUD_FMT_U8, 0};
+    struct audsettings as = {PCSPK_SAMPLE_RATE, 1, AUD_FMT_U8, 0};
 
-    if (!audio) {
-        AUD_log(s_spk, "No audio state\n");
-        return -1;
-    }
-    AUD_register_card(audio, s_spk, &s->card);
+    AUD_register_card(s_spk, &s->card);
 
     s->voice = AUD_open_out(&s->card, s->voice, s_spk, s, pcspk_callback, &as);
     if (!s->voice) {
@@ -118,7 +118,7 @@ static uint32_t pcspk_ioport_read(void *opaque, uint32_t addr)
     int out;
 
     s->dummy_refresh_clock ^= (1 << 4);
-    out = pit_get_out(s->pit, 2, qemu_get_clock(vm_clock)) << 5;
+    out = pit_get_out(s->pit, 2, qemu_get_clock_ns(vm_clock)) << 5;
 
     return pit_get_gate(s->pit, 2) | (s->data_on << 1) | s->dummy_refresh_clock | out;
 }
@@ -137,7 +137,7 @@ static void pcspk_ioport_write(void *opaque, uint32_t addr, uint32_t val)
     }
 }
 
-void pcspk_init(PITState *pit)
+void pcspk_init(ISADevice *pit)
 {
     PCSpkState *s = &pcspk_state;
 

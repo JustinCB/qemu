@@ -4,15 +4,18 @@
  * Copyright (c) 2006 Openedhand Ltd.
  * Written by Andrzej Zaborowski <balrog@zabor.org>
  *
- * This code is licenced under the GPL.
+ * This code is licensed under the GNU GPL v2.
  */
 #ifndef PXA_H
 # define PXA_H			"pxa.h"
+
+#include "memory.h"
 
 /* Interrupt numbers */
 # define PXA2XX_PIC_SSP3	0
 # define PXA2XX_PIC_USBH2	2
 # define PXA2XX_PIC_USBH1	3
+# define PXA2XX_PIC_KEYPAD	4
 # define PXA2XX_PIC_PWRI2C	6
 # define PXA25X_PIC_HWUART	7
 # define PXA27X_PIC_OST_4_11	7
@@ -62,79 +65,78 @@
 # define PXA2XX_INTERNAL_SIZE	0x40000
 
 /* pxa2xx_pic.c */
-qemu_irq *pxa2xx_pic_init(target_phys_addr_t base, CPUState *env);
-
-/* pxa2xx_timer.c */
-void pxa25x_timer_init(target_phys_addr_t base, qemu_irq *irqs);
-void pxa27x_timer_init(target_phys_addr_t base, qemu_irq *irqs, qemu_irq irq4);
+DeviceState *pxa2xx_pic_init(target_phys_addr_t base, CPUState *env);
 
 /* pxa2xx_gpio.c */
-struct pxa2xx_gpio_info_s;
-struct pxa2xx_gpio_info_s *pxa2xx_gpio_init(target_phys_addr_t base,
-                CPUState *env, qemu_irq *pic, int lines);
-void pxa2xx_gpio_set(struct pxa2xx_gpio_info_s *s, int line, int level);
-void pxa2xx_gpio_handler_set(struct pxa2xx_gpio_info_s *s, int line,
-                gpio_handler_t handler, void *opaque);
-void pxa2xx_gpio_read_notifier(struct pxa2xx_gpio_info_s *s,
-                void (*handler)(void *opaque), void *opaque);
+DeviceState *pxa2xx_gpio_init(target_phys_addr_t base,
+                CPUState *env, DeviceState *pic, int lines);
+void pxa2xx_gpio_read_notifier(DeviceState *dev, qemu_irq handler);
 
 /* pxa2xx_dma.c */
-struct pxa2xx_dma_state_s;
-struct pxa2xx_dma_state_s *pxa255_dma_init(target_phys_addr_t base,
-                qemu_irq irq);
-struct pxa2xx_dma_state_s *pxa27x_dma_init(target_phys_addr_t base,
-                qemu_irq irq);
-void pxa2xx_dma_request(struct pxa2xx_dma_state_s *s, int req_num, int on);
+DeviceState *pxa255_dma_init(target_phys_addr_t base, qemu_irq irq);
+DeviceState *pxa27x_dma_init(target_phys_addr_t base, qemu_irq irq);
 
 /* pxa2xx_lcd.c */
-struct pxa2xx_lcdc_s;
-struct pxa2xx_lcdc_s *pxa2xx_lcdc_init(target_phys_addr_t base,
-                qemu_irq irq, DisplayState *ds);
-void pxa2xx_lcd_vsync_cb(struct pxa2xx_lcdc_s *s,
-                void (*cb)(void *opaque), void *opaque);
+typedef struct PXA2xxLCDState PXA2xxLCDState;
+PXA2xxLCDState *pxa2xx_lcdc_init(target_phys_addr_t base,
+                qemu_irq irq);
+void pxa2xx_lcd_vsync_notifier(PXA2xxLCDState *s, qemu_irq handler);
 void pxa2xx_lcdc_oritentation(void *opaque, int angle);
 
 /* pxa2xx_mmci.c */
-struct pxa2xx_mmci_s;
-struct pxa2xx_mmci_s *pxa2xx_mmci_init(target_phys_addr_t base,
-                qemu_irq irq, void *dma);
-void pxa2xx_mmci_handlers(struct pxa2xx_mmci_s *s, void *opaque,
-                void (*readonly_cb)(void *, int),
-                void (*coverswitch_cb)(void *, int));
+typedef struct PXA2xxMMCIState PXA2xxMMCIState;
+PXA2xxMMCIState *pxa2xx_mmci_init(target_phys_addr_t base,
+                BlockDriverState *bd, qemu_irq irq,
+                qemu_irq rx_dma, qemu_irq tx_dma);
+void pxa2xx_mmci_handlers(PXA2xxMMCIState *s, qemu_irq readonly,
+                qemu_irq coverswitch);
 
 /* pxa2xx_pcmcia.c */
-struct pxa2xx_pcmcia_s;
-struct pxa2xx_pcmcia_s *pxa2xx_pcmcia_init(target_phys_addr_t base);
-int pxa2xx_pcmcia_attach(void *opaque, struct pcmcia_card_s *card);
+typedef struct PXA2xxPCMCIAState PXA2xxPCMCIAState;
+PXA2xxPCMCIAState *pxa2xx_pcmcia_init(target_phys_addr_t base);
+int pxa2xx_pcmcia_attach(void *opaque, PCMCIACardState *card);
 int pxa2xx_pcmcia_dettach(void *opaque);
 void pxa2xx_pcmcia_set_irq_cb(void *opaque, qemu_irq irq, qemu_irq cd_irq);
 
+/* pxa2xx_keypad.c */
+struct  keymap {
+    int column;
+    int row;
+};
+typedef struct PXA2xxKeyPadState PXA2xxKeyPadState;
+PXA2xxKeyPadState *pxa27x_keypad_init(target_phys_addr_t base,
+                qemu_irq irq);
+void pxa27x_register_keypad(PXA2xxKeyPadState *kp, struct keymap *map,
+                int size);
+
 /* pxa2xx.c */
-struct pxa2xx_ssp_s;
-void pxa2xx_ssp_attach(struct pxa2xx_ssp_s *port,
-                uint32_t (*readfn)(void *opaque),
-                void (*writefn)(void *opaque, uint32_t value), void *opaque);
-
-struct pxa2xx_i2c_s;
-struct pxa2xx_i2c_s *pxa2xx_i2c_init(target_phys_addr_t base,
+typedef struct PXA2xxI2CState PXA2xxI2CState;
+PXA2xxI2CState *pxa2xx_i2c_init(target_phys_addr_t base,
                 qemu_irq irq, uint32_t page_size);
-i2c_bus *pxa2xx_i2c_bus(struct pxa2xx_i2c_s *s);
+i2c_bus *pxa2xx_i2c_bus(PXA2xxI2CState *s);
 
-struct pxa2xx_i2s_s;
-struct pxa2xx_fir_s;
+typedef struct PXA2xxI2SState PXA2xxI2SState;
+typedef struct PXA2xxFIrState PXA2xxFIrState;
 
-struct pxa2xx_state_s {
+typedef struct {
     CPUState *env;
-    qemu_irq *pic;
-    struct pxa2xx_dma_state_s *dma;
-    struct pxa2xx_gpio_info_s *gpio;
-    struct pxa2xx_lcdc_s *lcd;
-    struct pxa2xx_ssp_s **ssp;
-    struct pxa2xx_i2c_s *i2c[2];
-    struct pxa2xx_mmci_s *mmc;
-    struct pxa2xx_pcmcia_s *pcmcia[2];
-    struct pxa2xx_i2s_s *i2s;
-    struct pxa2xx_fir_s *fir;
+    DeviceState *pic;
+    qemu_irq reset;
+    MemoryRegion sdram;
+    MemoryRegion internal;
+    MemoryRegion cm_iomem;
+    MemoryRegion mm_iomem;
+    MemoryRegion pm_iomem;
+    DeviceState *dma;
+    DeviceState *gpio;
+    PXA2xxLCDState *lcd;
+    SSIBus **ssp;
+    PXA2xxI2CState *i2c[2];
+    PXA2xxMMCIState *mmc;
+    PXA2xxPCMCIAState *pcmcia[2];
+    PXA2xxI2SState *i2s;
+    PXA2xxFIrState *fir;
+    PXA2xxKeyPadState *kp;
 
     /* Power management */
     target_phys_addr_t pm_base;
@@ -151,39 +153,13 @@ struct pxa2xx_state_s {
 
     /* Performance monitoring */
     uint32_t pmnc;
+} PXA2xxState;
 
-    /* Real-Time clock */
-    target_phys_addr_t rtc_base;
-    uint32_t rttr;
-    uint32_t rtsr;
-    uint32_t rtar;
-    uint32_t rdar1;
-    uint32_t rdar2;
-    uint32_t ryar1;
-    uint32_t ryar2;
-    uint32_t swar1;
-    uint32_t swar2;
-    uint32_t piar;
-    uint32_t last_rcnr;
-    uint32_t last_rdcr;
-    uint32_t last_rycr;
-    uint32_t last_swcr;
-    uint32_t last_rtcpicr;
-    int64_t last_hz;
-    int64_t last_sw;
-    int64_t last_pi;
-    QEMUTimer *rtc_hz;
-    QEMUTimer *rtc_rdal1;
-    QEMUTimer *rtc_rdal2;
-    QEMUTimer *rtc_swal1;
-    QEMUTimer *rtc_swal2;
-    QEMUTimer *rtc_pi;
-};
-
-struct pxa2xx_i2s_s {
-    target_phys_addr_t base;
+struct PXA2xxI2SState {
+    MemoryRegion iomem;
     qemu_irq irq;
-    struct pxa2xx_dma_state_s *dma;
+    qemu_irq rx_dma;
+    qemu_irq tx_dma;
     void (*data_req)(void *, int, int);
 
     uint32_t control[2];
@@ -203,12 +179,10 @@ struct pxa2xx_i2s_s {
 };
 
 # define PA_FMT			"0x%08lx"
-# define REG_FMT		"0x%lx"
+# define REG_FMT		"0x" TARGET_FMT_plx
 
-struct pxa2xx_state_s *pxa270_init(unsigned int sdram_size, DisplayState *ds,
-                const char *revision);
-struct pxa2xx_state_s *pxa255_init(unsigned int sdram_size, DisplayState *ds);
-
-void pxa2xx_reset(int line, int level, void *opaque);
+PXA2xxState *pxa270_init(MemoryRegion *address_space, unsigned int sdram_size,
+                         const char *revision);
+PXA2xxState *pxa255_init(MemoryRegion *address_space, unsigned int sdram_size);
 
 #endif	/* PXA_H */

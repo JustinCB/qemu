@@ -7,7 +7,7 @@
 
 #include "dis-asm.h"
 
-/* **** foatformat.h from sourceware.org CVS 2005-08-14.  */
+/* **** floatformat.h from sourceware.org CVS 2005-08-14.  */
 /* IEEE floating point support declarations, for GDB, the GNU Debugger.
    Copyright 1991, 1994, 1995, 1997, 2000, 2003 Free Software Foundation, Inc.
 
@@ -24,8 +24,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
+along with this program; if not, see <http://www.gnu.org/licenses/>.  */
 
 #if !defined (FLOATFORMAT_H)
 #define FLOATFORMAT_H 1
@@ -159,9 +158,8 @@ floatformat_is_valid (const struct floatformat *fmt, const char *from);
    the GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this file; see the file COPYING.  If not, write to the Free
-   Software Foundation, 51 Franklin Street - Fifth Floor, Boston, MA
-   02110-1301, USA.  */
+   along with this file; see the file COPYING.  If not,
+   see <http://www.gnu.org/licenses/>.  */
 
 /* These are used as bit flags for the arch field in the m68k_opcode
    structure.  */
@@ -540,19 +538,17 @@ extern const int m68k_numopcodes, m68k_numaliases;
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston,
-   MA 02110-1301, USA.  */
+   along with this program; if not, see <http://www.gnu.org/licenses/>.  */
 
 /* Local function prototypes.  */
 
-const char * const fpcr_names[] =
+static const char * const fpcr_names[] =
 {
   "", "%fpiar", "%fpsr", "%fpiar/%fpsr", "%fpcr",
   "%fpiar/%fpcr", "%fpsr/%fpcr", "%fpiar/%fpsr/%fpcr"
 };
 
-static char *const reg_names[] =
+static const char *const reg_names[] =
 {
   "%d0", "%d1", "%d2", "%d3", "%d4", "%d5", "%d6", "%d7",
   "%a0", "%a1", "%a2", "%a3", "%a4", "%a5", "%fp", "%sp",
@@ -560,8 +556,8 @@ static char *const reg_names[] =
 };
 
 /* Name of register halves for MAC/EMAC.
-   Seperate from reg_names since 'spu', 'fpl' look weird.  */
-static char *const reg_half_names[] =
+   Separate from reg_names since 'spu', 'fpl' look weird.  */
+static const char *const reg_half_names[] =
 {
   "%d0", "%d1", "%d2", "%d3", "%d4", "%d5", "%d6", "%d7",
   "%a0", "%a1", "%a2", "%a3", "%a4", "%a5", "%a6", "%a7",
@@ -576,38 +572,38 @@ static char *const reg_half_names[] =
 #endif
 
 /* Get a 1 byte signed integer.  */
-#define NEXTBYTE(p)  (p += 2, FETCH_DATA (info, p), COERCE_SIGNED_CHAR(p[-1]))
+#define NEXTBYTE(p)  (p += 2, fetch_data(info, p), COERCE_SIGNED_CHAR(p[-1]))
 
 /* Get a 2 byte signed integer.  */
 #define COERCE16(x) ((int) (((x) ^ 0x8000) - 0x8000))
 #define NEXTWORD(p)  \
-  (p += 2, FETCH_DATA (info, p), \
+  (p += 2, fetch_data(info, p), \
    COERCE16 ((p[-2] << 8) + p[-1]))
 
 /* Get a 4 byte signed integer.  */
 #define COERCE32(x) ((bfd_signed_vma) ((x) ^ 0x80000000) - 0x80000000)
 #define NEXTLONG(p)  \
-  (p += 4, FETCH_DATA (info, p), \
+  (p += 4, fetch_data(info, p), \
    (COERCE32 ((((((p[-4] << 8) + p[-3]) << 8) + p[-2]) << 8) + p[-1])))
 
 /* Get a 4 byte unsigned integer.  */
 #define NEXTULONG(p)  \
-  (p += 4, FETCH_DATA (info, p), \
+  (p += 4, fetch_data(info, p), \
    (unsigned int) ((((((p[-4] << 8) + p[-3]) << 8) + p[-2]) << 8) + p[-1]))
 
 /* Get a single precision float.  */
 #define NEXTSINGLE(val, p) \
-  (p += 4, FETCH_DATA (info, p), \
+  (p += 4, fetch_data(info, p), \
    floatformat_to_double (&floatformat_ieee_single_big, (char *) p - 4, &val))
 
 /* Get a double precision float.  */
 #define NEXTDOUBLE(val, p) \
-  (p += 8, FETCH_DATA (info, p), \
+  (p += 8, fetch_data(info, p), \
    floatformat_to_double (&floatformat_ieee_double_big, (char *) p - 8, &val))
 
 /* Get an extended precision float.  */
 #define NEXTEXTEND(val, p) \
-  (p += 12, FETCH_DATA (info, p), \
+  (p += 12, fetch_data(info, p), \
    floatformat_to_double (&floatformat_m68881_ext, (char *) p - 12, &val))
 
 /* Need a function to convert from packed to double
@@ -615,7 +611,7 @@ static char *const reg_half_names[] =
    packed number than a double anyway, so maybe
    there should be a special case to handle this... */
 #define NEXTPACKED(p) \
-  (p += 12, FETCH_DATA (info, p), 0.0)
+  (p += 12, fetch_data(info, p), 0.0)
 
 /* Maximum length of an instruction.  */
 #define MAXLEN 22
@@ -634,12 +630,8 @@ struct private
 /* Make sure that bytes from INFO->PRIVATE_DATA->BUFFER (inclusive)
    to ADDR (exclusive) are valid.  Returns 1 for success, longjmps
    on error.  */
-#define FETCH_DATA(info, addr) \
-  ((addr) <= ((struct private *) (info->private_data))->max_fetched \
-   ? 1 : fetch_data ((info), (addr)))
-
 static int
-fetch_data (struct disassemble_info *info, bfd_byte *addr)
+fetch_data2(struct disassemble_info *info, bfd_byte *addr)
 {
   int status;
   struct private *priv = (struct private *)info->private_data;
@@ -658,7 +650,17 @@ fetch_data (struct disassemble_info *info, bfd_byte *addr)
     priv->max_fetched = addr;
   return 1;
 }
-
+
+static int
+fetch_data(struct disassemble_info *info, bfd_byte *addr)
+{
+    if (addr <= ((struct private *) (info->private_data))->max_fetched) {
+        return 1;
+    } else {
+        return fetch_data2(info, addr);
+    }
+}
+
 /* This function is used to print to the bit-bucket.  */
 static int
 dummy_printer (FILE *file ATTRIBUTE_UNUSED,
@@ -732,64 +734,64 @@ fetch_arg (unsigned char *buffer,
       break;
 
     case 'k':
-      FETCH_DATA (info, buffer + 3);
+      fetch_data(info, buffer + 3);
       val = (buffer[3] >> 4);
       break;
 
     case 'C':
-      FETCH_DATA (info, buffer + 3);
+      fetch_data(info, buffer + 3);
       val = buffer[3];
       break;
 
     case '1':
-      FETCH_DATA (info, buffer + 3);
+      fetch_data(info, buffer + 3);
       val = (buffer[2] << 8) + buffer[3];
       val >>= 12;
       break;
 
     case '2':
-      FETCH_DATA (info, buffer + 3);
+      fetch_data(info, buffer + 3);
       val = (buffer[2] << 8) + buffer[3];
       val >>= 6;
       break;
 
     case '3':
     case 'j':
-      FETCH_DATA (info, buffer + 3);
+      fetch_data(info, buffer + 3);
       val = (buffer[2] << 8) + buffer[3];
       break;
 
     case '4':
-      FETCH_DATA (info, buffer + 5);
+      fetch_data(info, buffer + 5);
       val = (buffer[4] << 8) + buffer[5];
       val >>= 12;
       break;
 
     case '5':
-      FETCH_DATA (info, buffer + 5);
+      fetch_data(info, buffer + 5);
       val = (buffer[4] << 8) + buffer[5];
       val >>= 6;
       break;
 
     case '6':
-      FETCH_DATA (info, buffer + 5);
+      fetch_data(info, buffer + 5);
       val = (buffer[4] << 8) + buffer[5];
       break;
 
     case '7':
-      FETCH_DATA (info, buffer + 3);
+      fetch_data(info, buffer + 3);
       val = (buffer[2] << 8) + buffer[3];
       val >>= 7;
       break;
 
     case '8':
-      FETCH_DATA (info, buffer + 3);
+      fetch_data(info, buffer + 3);
       val = (buffer[2] << 8) + buffer[3];
       val >>= 10;
       break;
 
     case '9':
-      FETCH_DATA (info, buffer + 3);
+      fetch_data(info, buffer + 3);
       val = (buffer[2] << 8) + buffer[3];
       val >>= 5;
       break;
@@ -991,7 +993,7 @@ print_indexed (int basereg,
 	       disassemble_info *info)
 {
   int word;
-  static char *const scales[] = { "", ":2", ":4", ":8" };
+  static const char *const scales[] = { "", ":2", ":4", ":8" };
   bfd_vma base_disp;
   bfd_vma outer_disp;
   char buf[40];
@@ -1106,9 +1108,9 @@ print_insn_arg (const char *d,
     {
     case 'c':		/* Cache identifier.  */
       {
-        static char *const cacheFieldName[] = { "nc", "dc", "ic", "bc" };
+        static const char *const cacheFieldName[] = { "nc", "dc", "ic", "bc" };
         val = fetch_arg (buffer, place, 2, info);
-        (*info->fprintf_func) (info->stream, cacheFieldName[val]);
+        (*info->fprintf_func) (info->stream, "%s", cacheFieldName[val]);
         break;
       }
 
@@ -1157,7 +1159,7 @@ print_insn_arg (const char *d,
 	/* FIXME: There's a problem here, different m68k processors call the
 	   same address different names. This table can't get it right
 	   because it doesn't know which processor it's disassembling for.  */
-	static const struct { char *name; int value; } names[]
+	static const struct { const char *name; int value; } names[]
 	  = {{"%sfc", 0x000}, {"%dfc", 0x001}, {"%cacr", 0x002},
 	     {"%tc",  0x003}, {"%itt0",0x004}, {"%itt1", 0x005},
              {"%dtt0",0x006}, {"%dtt1",0x007}, {"%buscr",0x008},
@@ -1201,9 +1203,9 @@ print_insn_arg (const char *d,
     case 'M':
       if (place == 'h')
 	{
-	  static char *const scalefactor_name[] = { "<<", ">>" };
+	  static const char *const scalefactor_name[] = { "<<", ">>" };
 	  val = fetch_arg (buffer, place, 1, info);
-	  (*info->fprintf_func) (info->stream, scalefactor_name[val]);
+	  (*info->fprintf_func) (info->stream, "%s", scalefactor_name[val]);
 	}
       else
 	{
@@ -1633,7 +1635,7 @@ print_insn_arg (const char *d,
     case '3':
       {
 	int val = fetch_arg (buffer, place, 5, info);
-	char *name = 0;
+        const char *name = 0;
 
 	switch (val)
 	  {
@@ -1730,7 +1732,7 @@ match_insn_m68k (bfd_vma memaddr,
   const char *d;
 
   bfd_byte *buffer = priv->the_buffer;
-  fprintf_ftype save_printer = info->fprintf_func;
+  fprintf_function save_printer = info->fprintf_func;
   void (* save_print_address) (bfd_vma, struct disassemble_info *)
     = info->print_address_func;
 
@@ -1797,18 +1799,18 @@ match_insn_m68k (bfd_vma memaddr,
 	 this because we know exactly what the second word is, and we
 	 aren't going to print anything based on it.  */
       p = buffer + 6;
-      FETCH_DATA (info, p);
+      fetch_data(info, p);
       buffer[2] = buffer[4];
       buffer[3] = buffer[5];
     }
 
-  FETCH_DATA (info, p);
+  fetch_data(info, p);
 
   d = best->args;
 
   save_p = p;
   info->print_address_func = dummy_print_address;
-  info->fprintf_func = (fprintf_ftype) dummy_printer;
+  info->fprintf_func = dummy_printer;
 
   /* We scan the operands twice.  The first time we don't print anything,
      but look for errors.  */
@@ -1967,7 +1969,7 @@ print_insn_m68k (bfd_vma memaddr, disassemble_info *info)
       break;
     }
 
-  FETCH_DATA (info, buffer + 2);
+  fetch_data(info, buffer + 2);
   major_opcode = (buffer[0] >> 4) & 15;
 
   for (i = 0; i < numopcodes[major_opcode]; i++)
@@ -1981,7 +1983,7 @@ print_insn_m68k (bfd_vma memaddr, disassemble_info *info)
 	  /* Only fetch the next two bytes if we need to.  */
 	  && (((0xffff & match) == 0)
 	      ||
-	      (FETCH_DATA (info, buffer + 4)
+              (fetch_data(info, buffer + 4)
 	       && ((0xff & buffer[2] & (match >> 8)) == (0xff & (opcode >> 8)))
 	       && ((0xff & buffer[3] & match) == (0xff & opcode)))
 	      )
@@ -2047,9 +2049,8 @@ print_insn_m68k (bfd_vma memaddr, disassemble_info *info)
    the GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this file; see the file COPYING.  If not, write to the Free
-   Software Foundation, 51 Franklin Street - Fifth Floor, Boston, MA
-   02110-1301, USA.  */
+   along with this file; see the file COPYING.  If not,
+   see <http://www.gnu.org/licenses/>.  */
 
 #define one(x) ((unsigned int) (x) << 16)
 #define two(x, y) (((unsigned int) (x) << 16) + (y))
@@ -2378,7 +2379,7 @@ const struct m68k_opcode m68k_opcodes[] =
 {"eor", 4,	one(0005174),	one(0177777), "#wSs", m68000up },
 {"eor", 4,	one(0005100),	one(0177700), "#w$s", m68000up },
 {"eor", 2,	one(0130500),	one(0170700), "Dd$s", m68000up },
-		
+
 {"exg", 2,	one(0140500),	one(0170770), "DdDs", m68000up },
 {"exg", 2,	one(0140510),	one(0170770), "AdAs", m68000up },
 {"exg", 2,	one(0140610),	one(0170770), "DdAs", m68000up },
@@ -4011,13 +4012,13 @@ const struct m68k_opcode m68k_opcodes[] =
 {"roxrl", 2,	one(0160260),		one(0170770), "DdDs", m68000up },
 
 {"rtd", 4,	one(0047164),		one(0177777), "#w", m68010up },
-		
+
 {"rte", 2,	one(0047163),		one(0177777), "",   m68000up | mcfisa_a },
-		
+
 {"rtm", 2,	one(0003300),		one(0177760), "Rs", m68020 },
-		
+
 {"rtr", 2,	one(0047167),		one(0177777), "",   m68000up },
-		
+
 {"rts", 2,	one(0047165),		one(0177777), "",   m68000up | mcfisa_a },
 
 {"satsl", 2,	one(0046200),		one(0177770), "Ds", mcfisa_b },
@@ -4471,8 +4472,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
+along with this program; if not, see <http://www.gnu.org/licenses/>.  */
 
 /* This is needed to pick up the NAN macro on some systems.  */
 //#define _GNU_SOURCE
@@ -4561,12 +4561,12 @@ floatformat_i387_ext_is_valid (const struct floatformat *fmt, const char *from)
      zero can it be zero, and then it must be zero.  */
   unsigned long exponent, int_bit;
   const unsigned char *ufrom = (const unsigned char *) from;
-  
+
   exponent = get_field (ufrom, fmt->byteorder, fmt->totalsize,
 			fmt->exp_start, fmt->exp_len);
   int_bit = get_field (ufrom, fmt->byteorder, fmt->totalsize,
 		       fmt->man_start, 1);
-  
+
   if ((exponent == 0) != (int_bit == 0))
     return 0;
   else
@@ -4699,7 +4699,7 @@ get_field (const unsigned char *data, enum floatformat_byteorders order,
     }
   return result;
 }
-  
+
 #ifndef min
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #endif

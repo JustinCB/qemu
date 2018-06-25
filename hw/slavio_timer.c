@@ -2,7 +2,7 @@
  * QEMU Sparc SLAVIO timer controller emulation
  *
  * Copyright (c) 2003-2005 Fabrice Bellard
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
@@ -21,16 +21,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "vl.h"
 
-//#define DEBUG_TIMER
-
-#ifdef DEBUG_TIMER
-#define DPRINTF(fmt, args...) \
-do { printf("TIMER: " fmt , ##args); } while (0)
-#else
-#define DPRINTF(fmt, args...)
-#endif
+#include "sun4m.h"
+#include "qemu-timer.h"
+#include "sysbus.h"
+#include "trace.h"
 
 /*
  * Registers of hardware timer in sun4m.
@@ -38,7 +33,7 @@ do { printf("TIMER: " fmt , ##args); } while (0)
  * This is the timer/counter part of chip STP2001 (Slave I/O), also
  * produced as NCR89C105. See
  * http://www.ibiblio.org/pub/historic-linux/early-ports/Sparc/NCR/NCR89C105.txt
- * 
+ *
  * The 31-bit counter is incremented every 500ns by bit 9. Bits 8..0
  * are zero. Bit 31 is 1 when count has been reached.
  *
@@ -47,218 +42,383 @@ do { printf("TIMER: " fmt , ##args); } while (0)
  *
  */
 
-typedef struct SLAVIO_TIMERState {
+#define MAX_CPUS 16
+
+typedef struct CPUTimerState {
     qemu_irq irq;
     ptimer_state *timer;
     uint32_t count, counthigh, reached;
+    /* processor only */
+    uint32_t running;
     uint64_t limit;
-    int stopped;
-    int mode; // 0 = processor, 1 = user, 2 = system
+} CPUTimerState;
+
+typedef struct SLAVIO_TIMERState {
+    SysBusDevice busdev;
+    uint32_t num_cpus;
+    uint32_t cputimer_mode;
+    CPUTimerState cputimer[MAX_CPUS + 1];
 } SLAVIO_TIMERState;
 
-#define TIMER_MAXADDR 0x1f
-#define TIMER_SIZE (TIMER_MAXADDR + 1)
+typedef struct TimerContext {
+    SLAVIO_TIMERState *s;
+    unsigned int timer_index; /* 0 for system, 1 ... MAX_CPUS for CPU timers */
+} TimerContext;
+
+#define SYS_TIMER_SIZE 0x14
+#define CPU_TIMER_SIZE 0x10
+
+#define TIMER_LIMIT         0
+#define TIMER_COUNTER       1
+#define TIMER_COUNTER_NORST 2
+#define TIMER_STATUS        3
+#define TIMER_MODE          4
+
+#define TIMER_COUNT_MASK32 0xfffffe00
+#define TIMER_LIMIT_MASK32 0x7fffffff
+#define TIMER_MAX_COUNT64  0x7ffffffffffffe00ULL
+#define TIMER_MAX_COUNT32  0x7ffffe00ULL
+#define TIMER_REACHED      0x80000000
+#define TIMER_PERIOD       500ULL // 500ns
+#define LIMIT_TO_PERIODS(l) (((l) >> 9) - 1)
+#define PERIODS_TO_LIMIT(l) (((l) + 1) << 9)
+
+static int slavio_timer_is_user(TimerContext *tc)
+{
+    SLAVIO_TIMERState *s = tc->s;
+    unsigned int timer_index = tc->timer_index;
+
+    return timer_index != 0 && (s->cputimer_mode & (1 << (timer_index - 1)));
+}
 
 // Update count, set irq, update expire_time
 // Convert from ptimer countdown units
-static void slavio_timer_get_out(SLAVIO_TIMERState *s)
+static void slavio_timer_get_out(CPUTimerState *t)
 {
-    uint64_t count;
+    uint64_t count, limit;
 
-    count = s->limit - (ptimer_get_count(s->timer) << 9);
-    DPRINTF("get_out: limit %" PRIx64 " count %x%08x\n", s->limit, s->counthigh,
-            s->count);
-    s->count = count & 0xfffffe00;
-    s->counthigh = count >> 32;
+    if (t->limit == 0) { /* free-run system or processor counter */
+        limit = TIMER_MAX_COUNT32;
+    } else {
+        limit = t->limit;
+    }
+    count = limit - PERIODS_TO_LIMIT(ptimer_get_count(t->timer));
+
+    trace_slavio_timer_get_out(t->limit, t->counthigh, t->count);
+    t->count = count & TIMER_COUNT_MASK32;
+    t->counthigh = count >> 32;
 }
 
 // timer callback
 static void slavio_timer_irq(void *opaque)
 {
-    SLAVIO_TIMERState *s = opaque;
+    TimerContext *tc = opaque;
+    SLAVIO_TIMERState *s = tc->s;
+    CPUTimerState *t = &s->cputimer[tc->timer_index];
 
-    slavio_timer_get_out(s);
-    DPRINTF("callback: count %x%08x\n", s->counthigh, s->count);
-    s->reached = 0x80000000;
-    if (s->mode != 1)
-	qemu_irq_raise(s->irq);
+    slavio_timer_get_out(t);
+    trace_slavio_timer_irq(t->counthigh, t->count);
+    /* if limit is 0 (free-run), there will be no match */
+    if (t->limit != 0) {
+        t->reached = TIMER_REACHED;
+    }
+    /* there is no interrupt if user timer or free-run */
+    if (!slavio_timer_is_user(tc) && t->limit != 0) {
+        qemu_irq_raise(t->irq);
+    }
 }
 
 static uint32_t slavio_timer_mem_readl(void *opaque, target_phys_addr_t addr)
 {
-    SLAVIO_TIMERState *s = opaque;
+    TimerContext *tc = opaque;
+    SLAVIO_TIMERState *s = tc->s;
     uint32_t saddr, ret;
+    unsigned int timer_index = tc->timer_index;
+    CPUTimerState *t = &s->cputimer[timer_index];
 
-    saddr = (addr & TIMER_MAXADDR) >> 2;
+    saddr = addr >> 2;
     switch (saddr) {
-    case 0:
-	// read limit (system counter mode) or read most signifying
-	// part of counter (user mode)
-	if (s->mode != 1) {
-	    // clear irq
-            qemu_irq_lower(s->irq);
-	    s->reached = 0;
-            ret = s->limit & 0x7fffffff;
-	}
-	else {
-	    slavio_timer_get_out(s);
-            ret = s->counthigh & 0x7fffffff;
-	}
+    case TIMER_LIMIT:
+        // read limit (system counter mode) or read most signifying
+        // part of counter (user mode)
+        if (slavio_timer_is_user(tc)) {
+            // read user timer MSW
+            slavio_timer_get_out(t);
+            ret = t->counthigh | t->reached;
+        } else {
+            // read limit
+            // clear irq
+            qemu_irq_lower(t->irq);
+            t->reached = 0;
+            ret = t->limit & TIMER_LIMIT_MASK32;
+        }
         break;
-    case 1:
-	// read counter and reached bit (system mode) or read lsbits
-	// of counter (user mode)
-	slavio_timer_get_out(s);
-	if (s->mode != 1)
-            ret = (s->count & 0x7fffffff) | s->reached;
-	else
-            ret = s->count;
+    case TIMER_COUNTER:
+        // read counter and reached bit (system mode) or read lsbits
+        // of counter (user mode)
+        slavio_timer_get_out(t);
+        if (slavio_timer_is_user(tc)) { // read user timer LSW
+            ret = t->count & TIMER_MAX_COUNT64;
+        } else { // read limit
+            ret = (t->count & TIMER_MAX_COUNT32) |
+                t->reached;
+        }
         break;
-    case 3:
-	// read start/stop status
-        ret = s->stopped;
+    case TIMER_STATUS:
+        // only available in processor counter/timer
+        // read start/stop status
+        if (timer_index > 0) {
+            ret = t->running;
+        } else {
+            ret = 0;
+        }
         break;
-    case 4:
-	// read user/system mode
-        ret = s->mode & 1;
+    case TIMER_MODE:
+        // only available in system counter
+        // read user/system mode
+        ret = s->cputimer_mode;
         break;
     default:
+        trace_slavio_timer_mem_readl_invalid(addr);
         ret = 0;
         break;
     }
-    DPRINTF("read " TARGET_FMT_plx " = %08x\n", addr, ret);
-
+    trace_slavio_timer_mem_readl(addr, ret);
     return ret;
 }
 
-static void slavio_timer_mem_writel(void *opaque, target_phys_addr_t addr, uint32_t val)
+static void slavio_timer_mem_writel(void *opaque, target_phys_addr_t addr,
+                                    uint32_t val)
 {
-    SLAVIO_TIMERState *s = opaque;
+    TimerContext *tc = opaque;
+    SLAVIO_TIMERState *s = tc->s;
     uint32_t saddr;
-    int reload = 0;
+    unsigned int timer_index = tc->timer_index;
+    CPUTimerState *t = &s->cputimer[timer_index];
 
-    DPRINTF("write " TARGET_FMT_plx " %08x\n", addr, val);
-    saddr = (addr & TIMER_MAXADDR) >> 2;
+    trace_slavio_timer_mem_writel(addr, val);
+    saddr = addr >> 2;
     switch (saddr) {
-    case 0:
-	// set limit, reset counter
-        reload = 1;
-	qemu_irq_lower(s->irq);
-	// fall through
-    case 2:
-	// set limit without resetting counter
-        s->limit = val & 0x7ffffe00ULL;
-        if (!s->limit)
-            s->limit = 0x7ffffe00ULL;
-        ptimer_set_limit(s->timer, s->limit >> 9, reload);
-	break;
-    case 3:
-	// start/stop user counter
-	if (s->mode == 1) {
-	    if (val & 1) {
-                ptimer_stop(s->timer);
-		s->stopped = 1;
-	    }
-	    else {
-                ptimer_run(s->timer, 0);
-		s->stopped = 0;
-	    }
-	}
-	break;
-    case 4:
-	// bit 0: user (1) or system (0) counter mode
-	if (s->mode == 0 || s->mode == 1)
-	    s->mode = val & 1;
-        if (s->mode == 1) {
-            qemu_irq_lower(s->irq);
-            s->limit = -1ULL;
+    case TIMER_LIMIT:
+        if (slavio_timer_is_user(tc)) {
+            uint64_t count;
+
+            // set user counter MSW, reset counter
+            t->limit = TIMER_MAX_COUNT64;
+            t->counthigh = val & (TIMER_MAX_COUNT64 >> 32);
+            t->reached = 0;
+            count = ((uint64_t)t->counthigh << 32) | t->count;
+            trace_slavio_timer_mem_writel_limit(timer_index, count);
+            ptimer_set_count(t->timer, LIMIT_TO_PERIODS(t->limit - count));
+        } else {
+            // set limit, reset counter
+            qemu_irq_lower(t->irq);
+            t->limit = val & TIMER_MAX_COUNT32;
+            if (t->timer) {
+                if (t->limit == 0) { /* free-run */
+                    ptimer_set_limit(t->timer,
+                                     LIMIT_TO_PERIODS(TIMER_MAX_COUNT32), 1);
+                } else {
+                    ptimer_set_limit(t->timer, LIMIT_TO_PERIODS(t->limit), 1);
+                }
+            }
         }
-        ptimer_set_limit(s->timer, s->limit >> 9, 1);
-	break;
+        break;
+    case TIMER_COUNTER:
+        if (slavio_timer_is_user(tc)) {
+            uint64_t count;
+
+            // set user counter LSW, reset counter
+            t->limit = TIMER_MAX_COUNT64;
+            t->count = val & TIMER_MAX_COUNT64;
+            t->reached = 0;
+            count = ((uint64_t)t->counthigh) << 32 | t->count;
+            trace_slavio_timer_mem_writel_limit(timer_index, count);
+            ptimer_set_count(t->timer, LIMIT_TO_PERIODS(t->limit - count));
+        } else {
+            trace_slavio_timer_mem_writel_counter_invalid();
+        }
+        break;
+    case TIMER_COUNTER_NORST:
+        // set limit without resetting counter
+        t->limit = val & TIMER_MAX_COUNT32;
+        if (t->limit == 0) { /* free-run */
+            ptimer_set_limit(t->timer, LIMIT_TO_PERIODS(TIMER_MAX_COUNT32), 0);
+        } else {
+            ptimer_set_limit(t->timer, LIMIT_TO_PERIODS(t->limit), 0);
+        }
+        break;
+    case TIMER_STATUS:
+        if (slavio_timer_is_user(tc)) {
+            // start/stop user counter
+            if ((val & 1) && !t->running) {
+                trace_slavio_timer_mem_writel_status_start(timer_index);
+                ptimer_run(t->timer, 0);
+                t->running = 1;
+            } else if (!(val & 1) && t->running) {
+                trace_slavio_timer_mem_writel_status_stop(timer_index);
+                ptimer_stop(t->timer);
+                t->running = 0;
+            }
+        }
+        break;
+    case TIMER_MODE:
+        if (timer_index == 0) {
+            unsigned int i;
+
+            for (i = 0; i < s->num_cpus; i++) {
+                unsigned int processor = 1 << i;
+                CPUTimerState *curr_timer = &s->cputimer[i + 1];
+
+                // check for a change in timer mode for this processor
+                if ((val & processor) != (s->cputimer_mode & processor)) {
+                    if (val & processor) { // counter -> user timer
+                        qemu_irq_lower(curr_timer->irq);
+                        // counters are always running
+                        ptimer_stop(curr_timer->timer);
+                        curr_timer->running = 0;
+                        // user timer limit is always the same
+                        curr_timer->limit = TIMER_MAX_COUNT64;
+                        ptimer_set_limit(curr_timer->timer,
+                                         LIMIT_TO_PERIODS(curr_timer->limit),
+                                         1);
+                        // set this processors user timer bit in config
+                        // register
+                        s->cputimer_mode |= processor;
+                        trace_slavio_timer_mem_writel_mode_user(timer_index);
+                    } else { // user timer -> counter
+                        // stop the user timer if it is running
+                        if (curr_timer->running) {
+                            ptimer_stop(curr_timer->timer);
+                        }
+                        // start the counter
+                        ptimer_run(curr_timer->timer, 0);
+                        curr_timer->running = 1;
+                        // clear this processors user timer bit in config
+                        // register
+                        s->cputimer_mode &= ~processor;
+                        trace_slavio_timer_mem_writel_mode_counter(timer_index);
+                    }
+                }
+            }
+        } else {
+            trace_slavio_timer_mem_writel_mode_invalid();
+        }
+        break;
     default:
-	break;
+        trace_slavio_timer_mem_writel_invalid(addr);
+        break;
     }
 }
 
-static CPUReadMemoryFunc *slavio_timer_mem_read[3] = {
-    slavio_timer_mem_readl,
-    slavio_timer_mem_readl,
+static CPUReadMemoryFunc * const slavio_timer_mem_read[3] = {
+    NULL,
+    NULL,
     slavio_timer_mem_readl,
 };
 
-static CPUWriteMemoryFunc *slavio_timer_mem_write[3] = {
-    slavio_timer_mem_writel,
-    slavio_timer_mem_writel,
+static CPUWriteMemoryFunc * const slavio_timer_mem_write[3] = {
+    NULL,
+    NULL,
     slavio_timer_mem_writel,
 };
 
-static void slavio_timer_save(QEMUFile *f, void *opaque)
+static const VMStateDescription vmstate_timer = {
+    .name ="timer",
+    .version_id = 3,
+    .minimum_version_id = 3,
+    .minimum_version_id_old = 3,
+    .fields      = (VMStateField []) {
+        VMSTATE_UINT64(limit, CPUTimerState),
+        VMSTATE_UINT32(count, CPUTimerState),
+        VMSTATE_UINT32(counthigh, CPUTimerState),
+        VMSTATE_UINT32(reached, CPUTimerState),
+        VMSTATE_UINT32(running, CPUTimerState),
+        VMSTATE_PTIMER(timer, CPUTimerState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static const VMStateDescription vmstate_slavio_timer = {
+    .name ="slavio_timer",
+    .version_id = 3,
+    .minimum_version_id = 3,
+    .minimum_version_id_old = 3,
+    .fields      = (VMStateField []) {
+        VMSTATE_STRUCT_ARRAY(cputimer, SLAVIO_TIMERState, MAX_CPUS + 1, 3,
+                             vmstate_timer, CPUTimerState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static void slavio_timer_reset(DeviceState *d)
 {
-    SLAVIO_TIMERState *s = opaque;
+    SLAVIO_TIMERState *s = container_of(d, SLAVIO_TIMERState, busdev.qdev);
+    unsigned int i;
+    CPUTimerState *curr_timer;
 
-    qemu_put_be64s(f, &s->limit);
-    qemu_put_be32s(f, &s->count);
-    qemu_put_be32s(f, &s->counthigh);
-    qemu_put_be32(f, 0); // Was irq
-    qemu_put_be32s(f, &s->reached);
-    qemu_put_be32s(f, &s->stopped);
-    qemu_put_be32s(f, &s->mode);
-    qemu_put_ptimer(f, s->timer);
+    for (i = 0; i <= MAX_CPUS; i++) {
+        curr_timer = &s->cputimer[i];
+        curr_timer->limit = 0;
+        curr_timer->count = 0;
+        curr_timer->reached = 0;
+        if (i <= s->num_cpus) {
+            ptimer_set_limit(curr_timer->timer,
+                             LIMIT_TO_PERIODS(TIMER_MAX_COUNT32), 1);
+            ptimer_run(curr_timer->timer, 0);
+            curr_timer->running = 1;
+        }
+    }
+    s->cputimer_mode = 0;
 }
 
-static int slavio_timer_load(QEMUFile *f, void *opaque, int version_id)
+static int slavio_timer_init1(SysBusDevice *dev)
 {
-    SLAVIO_TIMERState *s = opaque;
-    uint32_t tmp;
-    
-    if (version_id != 2)
-        return -EINVAL;
+    int io;
+    SLAVIO_TIMERState *s = FROM_SYSBUS(SLAVIO_TIMERState, dev);
+    QEMUBH *bh;
+    unsigned int i;
+    TimerContext *tc;
 
-    qemu_get_be64s(f, &s->limit);
-    qemu_get_be32s(f, &s->count);
-    qemu_get_be32s(f, &s->counthigh);
-    qemu_get_be32s(f, &tmp); // Was irq
-    qemu_get_be32s(f, &s->reached);
-    qemu_get_be32s(f, &s->stopped);
-    qemu_get_be32s(f, &s->mode);
-    qemu_get_ptimer(f, s->timer);
+    for (i = 0; i <= MAX_CPUS; i++) {
+        tc = g_malloc0(sizeof(TimerContext));
+        tc->s = s;
+        tc->timer_index = i;
+
+        bh = qemu_bh_new(slavio_timer_irq, tc);
+        s->cputimer[i].timer = ptimer_init(bh);
+        ptimer_set_period(s->cputimer[i].timer, TIMER_PERIOD);
+
+        io = cpu_register_io_memory(slavio_timer_mem_read,
+                                    slavio_timer_mem_write, tc,
+                                    DEVICE_NATIVE_ENDIAN);
+        if (i == 0) {
+            sysbus_init_mmio(dev, SYS_TIMER_SIZE, io);
+        } else {
+            sysbus_init_mmio(dev, CPU_TIMER_SIZE, io);
+        }
+
+        sysbus_init_irq(dev, &s->cputimer[i].irq);
+    }
 
     return 0;
 }
 
-static void slavio_timer_reset(void *opaque)
-{
-    SLAVIO_TIMERState *s = opaque;
+static SysBusDeviceInfo slavio_timer_info = {
+    .init = slavio_timer_init1,
+    .qdev.name  = "slavio_timer",
+    .qdev.size  = sizeof(SLAVIO_TIMERState),
+    .qdev.vmsd  = &vmstate_slavio_timer,
+    .qdev.reset = slavio_timer_reset,
+    .qdev.props = (Property[]) {
+        DEFINE_PROP_UINT32("num_cpus",  SLAVIO_TIMERState, num_cpus,  0),
+        DEFINE_PROP_END_OF_LIST(),
+    }
+};
 
-    s->limit = 0x7ffffe00ULL;
-    s->count = 0;
-    s->reached = 0;
-    s->mode &= 2;
-    ptimer_set_limit(s->timer, s->limit >> 9, 1);
-    ptimer_run(s->timer, 0);
-    s->stopped = 1;
-    qemu_irq_lower(s->irq);
+static void slavio_timer_register_devices(void)
+{
+    sysbus_register_withprop(&slavio_timer_info);
 }
 
-void slavio_timer_init(target_phys_addr_t addr, qemu_irq irq, int mode)
-{
-    int slavio_timer_io_memory;
-    SLAVIO_TIMERState *s;
-    QEMUBH *bh;
-
-    s = qemu_mallocz(sizeof(SLAVIO_TIMERState));
-    if (!s)
-        return;
-    s->irq = irq;
-    s->mode = mode;
-    bh = qemu_bh_new(slavio_timer_irq, s);
-    s->timer = ptimer_init(bh);
-    ptimer_set_period(s->timer, 500ULL);
-
-    slavio_timer_io_memory = cpu_register_io_memory(0, slavio_timer_mem_read,
-						    slavio_timer_mem_write, s);
-    cpu_register_physical_memory(addr, TIMER_SIZE, slavio_timer_io_memory);
-    register_savevm("slavio_timer", addr, 2, slavio_timer_save, slavio_timer_load, s);
-    qemu_register_reset(slavio_timer_reset, s);
-    slavio_timer_reset(s);
-}
+device_init(slavio_timer_register_devices)

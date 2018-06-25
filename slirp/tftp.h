@@ -16,18 +16,28 @@
 struct tftp_t {
   struct ip ip;
   struct udphdr udp;
-  u_int16_t tp_op;
+  uint16_t tp_op;
   union {
-    struct { 
-      u_int16_t tp_block_nr;
-      u_int8_t tp_buf[512];
+    struct {
+      uint16_t tp_block_nr;
+      uint8_t tp_buf[512];
     } tp_data;
-    struct { 
-      u_int16_t tp_error_code;
-      u_int8_t tp_msg[512];
+    struct {
+      uint16_t tp_error_code;
+      uint8_t tp_msg[512];
     } tp_error;
-    u_int8_t tp_buf[512 + 2];
+    char tp_buf[512 + 2];
   } x;
+};
+
+struct tftp_session {
+    Slirp *slirp;
+    char *filename;
+
+    struct in_addr client_ip;
+    uint16_t client_port;
+
+    int timestamp;
 };
 
 void tftp_input(struct mbuf *m);

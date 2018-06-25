@@ -1,29 +1,30 @@
-/* 
+/*
  * Arm PrimeCell PL181 MultiMedia Card Interface
  *
  * Copyright (c) 2007 CodeSourcery.
  * Written by Paul Brook
  *
- * This code is licenced under the GPL.
+ * This code is licensed under the GPL.
  */
 
-#include "vl.h"
+#include "blockdev.h"
+#include "sysbus.h"
 #include "sd.h"
 
 //#define DEBUG_PL181 1
 
 #ifdef DEBUG_PL181
-#define DPRINTF(fmt, args...) \
-do { printf("pl181: " fmt , ##args); } while (0)
+#define DPRINTF(fmt, ...) \
+do { printf("pl181: " fmt , ## __VA_ARGS__); } while (0)
 #else
-#define DPRINTF(fmt, args...) do {} while(0)
+#define DPRINTF(fmt, ...) do {} while(0)
 #endif
 
 #define PL181_FIFO_LEN 16
 
 typedef struct {
+    SysBusDevice busdev;
     SDState *card;
-    uint32_t base;
     uint32_t clock;
     uint32_t power;
     uint32_t cmdarg;
@@ -46,6 +47,8 @@ typedef struct {
     int linux_hack;
     uint32_t fifo[PL181_FIFO_LEN];
     qemu_irq irq[2];
+    /* GPIO outputs for 'card is readonly' and 'card inserted' */
+    qemu_irq cardstatus[2];
 } pl181_state;
 
 #define PL181_CMD_INDEX     0x3f
@@ -135,7 +138,7 @@ static uint32_t pl181_fifo_pop(pl181_state *s)
 
 static void pl181_send_command(pl181_state *s)
 {
-    struct sd_request_s request;
+    SDRequest request;
     uint8_t response[16];
     int rlen;
 
@@ -160,7 +163,7 @@ static void pl181_send_command(pl181_state *s)
             s->response[2] = RWORD(8);
             s->response[3] = RWORD(12) & ~1;
         }
-        DPRINTF("Response recieved\n");
+        DPRINTF("Response received\n");
         s->status |= PL181_STATUS_CMDRESPEND;
 #undef RWORD
     } else {
@@ -174,46 +177,47 @@ error:
     s->status |= PL181_STATUS_CMDTIMEOUT;
 }
 
-/* Transfer data between teh card and the FIFO.  This is complicated by
+/* Transfer data between the card and the FIFO.  This is complicated by
    the FIFO holding 32-bit words and the card taking data in single byte
    chunks.  FIFO bytes are transferred in little-endian order.  */
-   
+
 static void pl181_fifo_run(pl181_state *s)
 {
     uint32_t bits;
-    uint32_t value;
+    uint32_t value = 0;
     int n;
-    int limit;
     int is_read;
 
     is_read = (s->datactrl & PL181_DATA_DIRECTION) != 0;
     if (s->datacnt != 0 && (!is_read || sd_data_ready(s->card))
             && !s->linux_hack) {
-        limit = is_read ? PL181_FIFO_LEN : 0;
-        n = 0;
-        value = 0;
-        while (s->datacnt && s->fifo_len != limit) {
-            if (is_read) {
+        if (is_read) {
+            n = 0;
+            while (s->datacnt && s->fifo_len < PL181_FIFO_LEN) {
                 value |= (uint32_t)sd_read_data(s->card) << (n * 8);
+                s->datacnt--;
                 n++;
                 if (n == 4) {
                     pl181_fifo_push(s, value);
-                    value = 0;
                     n = 0;
+                    value = 0;
                 }
-            } else {
+            }
+            if (n != 0) {
+                pl181_fifo_push(s, value);
+            }
+        } else { /* write */
+            n = 0;
+            while (s->datacnt > 0 && (s->fifo_len > 0 || n > 0)) {
                 if (n == 0) {
                     value = pl181_fifo_pop(s);
                     n = 4;
                 }
+                n--;
+                s->datacnt--;
                 sd_write_data(s->card, value & 0xff);
                 value >>= 8;
-                n--;
             }
-            s->datacnt--;
-        }
-        if (n && is_read) {
-            pl181_fifo_push(s, value);
         }
     }
     s->status &= ~(PL181_STATUS_RX_FIFO | PL181_STATUS_TX_FIFO);
@@ -260,7 +264,6 @@ static uint32_t pl181_read(void *opaque, target_phys_addr_t offset)
     pl181_state *s = (pl181_state *)opaque;
     uint32_t tmp;
 
-    offset -= s->base;
     if (offset >= 0xfe0 && offset < 0x1000) {
         return pl181_id[(offset - 0xfe0) >> 2];
     }
@@ -333,7 +336,7 @@ static uint32_t pl181_read(void *opaque, target_phys_addr_t offset)
             return value;
         }
     default:
-        cpu_abort (cpu_single_env, "pl181_read: Bad offset %x\n", offset);
+        hw_error("pl181_read: Bad offset %x\n", (int)offset);
         return 0;
     }
 }
@@ -343,7 +346,6 @@ static void pl181_write(void *opaque, target_phys_addr_t offset,
 {
     pl181_state *s = (pl181_state *)opaque;
 
-    offset -= s->base;
     switch (offset) {
     case 0x00: /* Power */
         s->power = value & 0xff;
@@ -405,18 +407,18 @@ static void pl181_write(void *opaque, target_phys_addr_t offset,
         }
         break;
     default:
-        cpu_abort (cpu_single_env, "pl181_write: Bad offset %x\n", offset);
+        hw_error("pl181_write: Bad offset %x\n", (int)offset);
     }
     pl181_update(s);
 }
 
-static CPUReadMemoryFunc *pl181_readfn[] = {
+static CPUReadMemoryFunc * const pl181_readfn[] = {
    pl181_read,
    pl181_read,
    pl181_read
 };
 
-static CPUWriteMemoryFunc *pl181_writefn[] = {
+static CPUWriteMemoryFunc * const pl181_writefn[] = {
    pl181_write,
    pl181_write,
    pl181_write
@@ -444,23 +446,34 @@ static void pl181_reset(void *opaque)
     s->linux_hack = 0;
     s->mask[0] = 0;
     s->mask[1] = 0;
+
+    /* We can assume our GPIO outputs have been wired up now */
+    sd_set_cb(s->card, s->cardstatus[0], s->cardstatus[1]);
 }
 
-void pl181_init(uint32_t base, BlockDriverState *bd,
-                qemu_irq irq0, qemu_irq irq1)
+static int pl181_init(SysBusDevice *dev)
 {
     int iomemtype;
-    pl181_state *s;
+    pl181_state *s = FROM_SYSBUS(pl181_state, dev);
+    DriveInfo *dinfo;
 
-    s = (pl181_state *)qemu_mallocz(sizeof(pl181_state));
-    iomemtype = cpu_register_io_memory(0, pl181_readfn,
-                                       pl181_writefn, s);
-    cpu_register_physical_memory(base, 0x00001000, iomemtype);
-    s->base = base;
-    s->card = sd_init(bd);
-    s->irq[0] = irq0;
-    s->irq[1] = irq1;
+    iomemtype = cpu_register_io_memory(pl181_readfn, pl181_writefn, s,
+                                       DEVICE_NATIVE_ENDIAN);
+    sysbus_init_mmio(dev, 0x1000, iomemtype);
+    sysbus_init_irq(dev, &s->irq[0]);
+    sysbus_init_irq(dev, &s->irq[1]);
+    qdev_init_gpio_out(&s->busdev.qdev, s->cardstatus, 2);
+    dinfo = drive_get_next(IF_SD);
+    s->card = sd_init(dinfo ? dinfo->bdrv : NULL, 0);
     qemu_register_reset(pl181_reset, s);
     pl181_reset(s);
     /* ??? Save/restore.  */
+    return 0;
 }
+
+static void pl181_register_devices(void)
+{
+    sysbus_register_dev("pl181", sizeof(pl181_state), pl181_init);
+}
+
+device_init(pl181_register_devices)

@@ -15,8 +15,7 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <fcntl.h>
 #include <stdio.h>
@@ -68,7 +67,7 @@
 # define DEBUG_ENABLE_ALL()  static int __DEBUG_qemu_user_force_enable = 1
     DEBUG_ENABLE_ALL();
 
-# define DPRINTF(...) do { if(loglevel) fprintf(logfile, __VA_ARGS__); \
+# define DPRINTF(...) do { qemu_log(__VA_ARGS__); \
                            if(__DEBUG_qemu_user_force_enable) fprintf(stderr, __VA_ARGS__); \
                          } while(0)
 #else
@@ -76,7 +75,7 @@
 # define DEBUG_BEGIN_ENABLE
 # define DEBUG_END_ENABLE
 
-# define DPRINTF(...) do { if(loglevel) fprintf(logfile, __VA_ARGS__); } while(0)
+# define DPRINTF(...) do { qemu_log(__VA_ARGS__); } while(0)
 #endif
 
 enum {
@@ -135,7 +134,7 @@ void static inline print_description_msg_header(mach_msg_header_t *hdr)
         { 4241876,  "lu_message_reply_id" }, /* lookupd */
     };
 
-    for(i = 0; i < sizeof(msg_name)/sizeof(msg_name[0]); i++) {
+    for(i = 0; i < ARRAY_SIZE(msg_name); i++) {
         if(msg_name[i].number == hdr->msgh_id)
         {
             name = msg_name[i].name;
@@ -210,7 +209,7 @@ static inline void print_mach_msg_return(mach_msg_return_t ret)
         DPRINTF("MACH_MSG_SUCCESS\n");
     else
     {
-        for( i = 0; i < sizeof(msg_name)/sizeof(msg_name[0]); i++) {
+        for( i = 0; i < ARRAY_SIZE(msg_name); i++) {
             if(msg_name[i].code == ret) {
                 DPRINTF("%s\n", msg_name[i].name);
                 found = 1;
@@ -417,7 +416,7 @@ long do_mach_syscall(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uint3
                 uint32_t arg4, uint32_t arg5, uint32_t arg6, uint32_t arg7,
                 uint32_t arg8)
 {
-    extern uint32_t mach_reply_port();
+    extern uint32_t mach_reply_port(void);
 
     long ret = 0;
 
@@ -551,7 +550,7 @@ long do_thread_syscall(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uin
                 uint32_t arg8)
 {
     extern uint32_t cthread_set_self(uint32_t);
-    extern uint32_t processor_facilities_used();
+    extern uint32_t processor_facilities_used(void);
     long ret = 0;
 
     arg1 = tswap32(arg1);
@@ -626,7 +625,7 @@ static inline void byteswap_winsize(struct winsize *w)
     tswap16s(&w->ws_ypixel);
 }
 
-#define STRUCT(name, list...) STRUCT_ ## name,
+#define STRUCT(name, ...) STRUCT_ ## name,
 #define STRUCT_SPECIAL(name) STRUCT_ ## name,
 enum {
 #include "ioctls_types.h"
@@ -634,7 +633,7 @@ enum {
 #undef STRUCT
 #undef STRUCT_SPECIAL
 
-#define STRUCT(name, list...) const argtype struct_ ## name ## _def[] = { list, TYPE_NULL };
+#define STRUCT(name, ...) const argtype struct_ ## name ## _def[] = {  __VA_ARGS__, TYPE_NULL };
 #define STRUCT_SPECIAL(name)
 #include "ioctls_types.h"
 #undef STRUCT
@@ -654,9 +653,9 @@ typedef struct IOCTLEntry {
 
 #define MAX_STRUCT_SIZE 4096
 
-IOCTLEntry ioctl_entries[] = {
-#define IOCTL(cmd, access, types...) \
-    { cmd, cmd, #cmd, access, { types } },
+static IOCTLEntry ioctl_entries[] = {
+#define IOCTL(cmd, access,  ...)                        \
+    { cmd, cmd, #cmd, access, {  __VA_ARGS__ } },
 #include "ioctls.h"
     { 0, 0, },
 };
@@ -761,8 +760,8 @@ static inline void byteswap_attrbuf(struct attrbuf_header *attrbuf, struct attrl
 
 static inline void byteswap_statfs(struct statfs *s)
 {
-    tswap16s((uint16_t*)&s->f_otype);
-    tswap16s((uint16_t*)&s->f_oflags);
+    tswap16s((uint16_t*)&s->f_type);
+    tswap16s((uint16_t*)&s->f_flags);
     tswap32s((uint32_t*)&s->f_bsize);
     tswap32s((uint32_t*)&s->f_iosize);
     tswap32s((uint32_t*)&s->f_blocks);
@@ -772,7 +771,7 @@ static inline void byteswap_statfs(struct statfs *s)
     tswap32s((uint32_t*)&s->f_ffree);
     tswap32s((uint32_t*)&s->f_fsid.val[0]);
     tswap32s((uint32_t*)&s->f_fsid.val[1]);
-    tswap16s((uint16_t*)&s->f_reserved1);
+    tswap16s((uint16_t*)&s->f_reserved);
     tswap16s((uint16_t*)&s->f_type);
     tswap32s((uint32_t*)&s->f_flags);
 }
@@ -780,7 +779,11 @@ static inline void byteswap_statfs(struct statfs *s)
 static inline void byteswap_stat(struct stat *s)
 {
     tswap32s((uint32_t*)&s->st_dev);
+#if __DARWIN_64_BIT_INO_T
+    tswap64s((uint64_t *)&s->st_ino);
+#else
     tswap32s(&s->st_ino);
+#endif
     tswap16s(&s->st_mode);
     tswap16s(&s->st_nlink);
     tswap32s(&s->st_uid);
@@ -830,7 +833,7 @@ static inline void byteswap_timeval(struct timeval *t)
 }
 
 long do_unix_syscall_indirect(void *cpu_env, int num);
-long do_sync();
+long do_sync(void);
 long do_exit(uint32_t arg1);
 long do_getlogin(char *out, uint32_t size);
 long do_open(char * arg1, uint32_t arg2, uint32_t arg3);
@@ -859,7 +862,7 @@ long no_syscall(void *cpu_env, int num);
 
 long do_pread(uint32_t arg1, void * arg2, size_t arg3, off_t arg4)
 {
-    DPRINTF("0x%x, %p, 0x%lx, 0x%llx\n", arg1, arg2, arg3, arg4);
+    DPRINTF("0x%x, %p, 0x%lx, 0x%" PRIx64 "\n", arg1, arg2, arg3, arg4);
     long ret = pread(arg1, arg2, arg3, arg4);
     return ret;
 }
@@ -897,10 +900,10 @@ typedef long (*syscall_function_t)(void *cpu_env, int num);
 #define WRAPPER_CALL_DIRECT_6(function, _arg1, _arg2, _arg3, _arg4, _arg5, _arg6) long __qemu_##function(void *cpu_env) { int i = 0;   typeof(_arg1) arg1 = _arg1; typeof(_arg2) arg2 = _arg2; typeof(_arg3) arg3 = _arg3; typeof(_arg4) arg4 = _arg4; typeof(_arg5) arg5 = _arg5; typeof(_arg6) arg6 = _arg6;  return (long)function(arg1, arg2, arg3, arg4, arg5, arg6); }
 #define WRAPPER_CALL_DIRECT_7(function, _arg1, _arg2, _arg3, _arg4, _arg5, _arg6, _arg7) long __qemu_##function(void *cpu_env) { int i = 0;   typeof(_arg1) arg1 = _arg1; typeof(_arg2) arg2 = _arg2; typeof(_arg3) arg3 = _arg3; typeof(_arg4) arg4 = _arg4; typeof(_arg5) arg5 = _arg5; typeof(_arg6) arg6 = _arg6; typeof(_arg7) arg7 = _arg7; return (long)function(arg1, arg2, arg3, arg4, arg5, arg6, arg7); }
 #define WRAPPER_CALL_DIRECT_8(function, _arg1, _arg2, _arg3, _arg4, _arg5, _arg6, _arg7, _arg8) long __qemu_##function(void *cpu_env) { int i = 0;   typeof(_arg1) arg1 = _arg1; typeof(_arg2) arg2 = _arg2; typeof(_arg3) arg3 = _arg3; typeof(_arg4) arg4 = _arg4; typeof(_arg5) arg5 = _arg5; typeof(_arg6) arg6 = _arg6; typeof(_arg7) arg7 = _arg7; typeof(_arg8) arg8 = _arg8;  return (long)function(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8); }
-#define WRAPPER_CALL_DIRECT(function, nargs, args...) WRAPPER_CALL_DIRECT_##nargs(function, args)
-#define WRAPPER_CALL_NOERRNO(function, nargs, args...)  WRAPPER_CALL_DIRECT(function, nargs, args)
-#define WRAPPER_CALL_INDIRECT(function, nargs, args...)
-#define ENTRY(name, number, function, nargs, call_type, args...)  WRAPPER_##call_type(function, nargs, args)
+#define WRAPPER_CALL_DIRECT(function, nargs, ...) WRAPPER_CALL_DIRECT_##nargs(function, __VA_ARGS__)
+#define WRAPPER_CALL_NOERRNO(function, nargs, ...)  WRAPPER_CALL_DIRECT(function, nargs, __VA_ARGS__)
+#define WRAPPER_CALL_INDIRECT(function, nargs, ...)
+#define ENTRY(name, number, function, nargs, call_type, ...)  WRAPPER_##call_type(function, nargs, __VA_ARGS__)
 
 #include "syscalls.h"
 
@@ -925,7 +928,7 @@ typedef long (*syscall_function_t)(void *cpu_env, int num);
 #define ENTRY_CALL_DIRECT(name, number, function, nargs, call_type)  _ENTRY(name, number, __qemu_##function, nargs, call_type)
 #define ENTRY_CALL_NOERRNO(name, number, function, nargs, call_type) ENTRY_CALL_DIRECT(name, number, function, nargs, call_type)
 #define ENTRY_CALL_INDIRECT(name, number, function, nargs, call_type) _ENTRY(name, number, function, nargs, call_type)
-#define ENTRY(name, number, function, nargs, call_type, args...) ENTRY_##call_type(name, number, function, nargs, call_type)
+#define ENTRY(name, number, function, nargs, call_type, ...) ENTRY_##call_type(name, number, function, nargs, call_type)
 
 #define CALL_DIRECT 1
 #define CALL_INDIRECT 2
@@ -978,7 +981,7 @@ long do_unix_syscall_indirect(void *cpu_env, int num)
 #elif TARGET_PPC
     {
         int i;
-        /* XXX: not really needed those regs are volatile accross calls */
+        /* XXX: not really needed those regs are volatile across calls */
         uint32_t **regs = ((CPUPPCState*)cpu_env)->gpr;
         for(i = 11; i > 3; i--)
             *regs[i] = *regs[i-1];
@@ -996,7 +999,7 @@ long do_exit(uint32_t arg1)
     return -1;
 }
 
-long do_sync()
+long do_sync(void)
 {
     sync();
     return 0;
@@ -1336,7 +1339,7 @@ static inline long bswap_syctl(int * mib, int count, void *buf, int size)
         if(!(sysctl = sysctl->childs))
             break;
     }
-    
+
     if(ret->childs)
         qerror("we shouldn't have a directory element\n");
 
@@ -1375,7 +1378,7 @@ long do___sysctl(int * name, uint32_t namelen, void * oldp, size_t * oldlenp, vo
         //bswap_syctl(name, namelen, newp, newlen);
         tswap32s((uint32_t*)oldlenp);
     }
-        
+
     if(name) /* Sometimes sysctl is called with no arg1, ignore */
         ret = get_errno(sysctl(name, namelen, oldp, oldlenp, newp, newlen));
 
@@ -1499,8 +1502,8 @@ static inline void bswap_fcntl_arg(int cmd, void * arg)
         case F_RDADVISE:
             bswap_radvisory(arg);
             break;
-        case F_READBOOTSTRAP:
-        case F_WRITEBOOTSTRAP:
+        case /*F_READBOOTSTRAP*/46:
+        case /*F_WRITEBOOTSTRAP*/47:
             bswap_fbootstraptransfer(arg);
             break;
         case F_LOG2PHYS:

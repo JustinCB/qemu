@@ -1,11 +1,13 @@
-/* 
+/*
  * ColdFire UART emulation.
  *
  * Copyright (c) 2007 CodeSourcery.
  *
- * This code is licenced under the GPL
+ * This code is licensed under the GPL
  */
-#include "vl.h"
+#include "hw.h"
+#include "mcf.h"
+#include "qemu-char.h"
 
 typedef struct {
     uint8_t mr[2];
@@ -86,6 +88,7 @@ uint32_t mcf_uart_read(void *opaque, target_phys_addr_t addr)
             if (s->fifo_len == 0)
                 s->sr &= ~MCF_UART_RxRDY;
             mcf_uart_update(s);
+            qemu_chr_accept_input(s->chr);
             return val;
         }
     case 0x10:
@@ -107,7 +110,7 @@ static void mcf_uart_do_tx(mcf_uart_state *s)
 {
     if (s->tx_enabled && (s->sr & MCF_UART_TxEMP) == 0) {
         if (s->chr)
-            qemu_chr_write(s->chr, (unsigned char *)&s->tb, 1);
+            qemu_chr_fe_write(s->chr, (unsigned char *)&s->tb, 1);
         s->sr |= MCF_UART_TxEMP;
     }
     if (s->tx_enabled) {
@@ -269,7 +272,7 @@ void *mcf_uart_init(qemu_irq irq, CharDriverState *chr)
 {
     mcf_uart_state *s;
 
-    s = qemu_mallocz(sizeof(mcf_uart_state));
+    s = g_malloc0(sizeof(mcf_uart_state));
     s->chr = chr;
     s->irq = irq;
     if (chr) {
@@ -281,13 +284,13 @@ void *mcf_uart_init(qemu_irq irq, CharDriverState *chr)
 }
 
 
-static CPUReadMemoryFunc *mcf_uart_readfn[] = {
+static CPUReadMemoryFunc * const mcf_uart_readfn[] = {
    mcf_uart_read,
    mcf_uart_read,
    mcf_uart_read
 };
 
-static CPUWriteMemoryFunc *mcf_uart_writefn[] = {
+static CPUWriteMemoryFunc * const mcf_uart_writefn[] = {
    mcf_uart_write,
    mcf_uart_write,
    mcf_uart_write
@@ -300,7 +303,8 @@ void mcf_uart_mm_init(target_phys_addr_t base, qemu_irq irq,
     int iomemtype;
 
     s = mcf_uart_init(irq, chr);
-    iomemtype = cpu_register_io_memory(0, mcf_uart_readfn,
-                                       mcf_uart_writefn, s);
+    iomemtype = cpu_register_io_memory(mcf_uart_readfn,
+                                       mcf_uart_writefn, s,
+                                       DEVICE_NATIVE_ENDIAN);
     cpu_register_physical_memory(base, 0x40, iomemtype);
 }

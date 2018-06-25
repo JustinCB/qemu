@@ -181,7 +181,7 @@
 #define TARGET_NR_nfsservctl                        180
 #define TARGET_NR_getpmsg                           181	/* reserved for LiS/STREAMS */
 #define TARGET_NR_putpmsg                           182	/* reserved for LiS/STREAMS */
-#define TARGET_NR_afs_syscall                       183	/* reserved for AFS */ 
+#define TARGET_NR_afs_syscall                       183	/* reserved for AFS */
 #define TARGET_NR_tuxcall      		184 /* reserved for tux */
 #define TARGET_NR_security			185
 #define TARGET_NR_gettid		186
@@ -278,3 +278,30 @@
 #define TARGET_NR_sync_file_range	277
 #define TARGET_NR_vmsplice		278
 #define TARGET_NR_move_pages		279
+#define TARGET_NR_utimensat		280
+#define TARGET_NR_epoll_pwait	281
+#define TARGET_NR_signalfd		282
+#define TARGET_NR_timerfd		283
+#define TARGET_NR_eventfd		284
+#define TARGET_NR_fallocate		285
+#define TARGET_NR_timerfd_settime	286
+#define TARGET_NR_timerfd_gettime	287
+#define TARGET_NR_accept4		288
+#define TARGET_NR_signalfd4		289
+#define TARGET_NR_eventfd2		290
+#define TARGET_NR_epoll_create1	291
+#define TARGET_NR_dup3			292
+#define TARGET_NR_pipe2		293
+#define TARGET_NR_inotify_init1	294
+#define TARGET_NR_preadv                295
+#define TARGET_NR_pwritev               296
+#define TARGET_NR_rt_tgsigqueueinfo     297
+#define TARGET_NR_perf_event_open       298
+#define TARGET_NR_recvmmsg              299
+#define TARGET_NR_fanotify_init         300
+#define TARGET_NR_fanotify_mark         301
+#define TARGET_NR_prlimit64             302
+#define TARGET_NR_name_to_handle_at     303
+#define TARGET_NR_open_by_handle_at     304
+#define TARGET_NR_clock_adjtime         305
+#define TARGET_NR_syncfs                306

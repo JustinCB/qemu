@@ -161,7 +161,7 @@
 #define TARGET_NR_osf_fstatfs	161
 
 #define TARGET_NR_osf_asynch_daemon	163	/* not implemented */
-#define TARGET_NR_osf_getfh		164	/* not implemented */	
+#define TARGET_NR_osf_getfh		164	/* not implemented */
 #define TARGET_NR_osf_getdomainname	165
 #define TARGET_NR_setdomainname	166
 
@@ -329,7 +329,7 @@
 #define TARGET_NR_lremovexattr		392
 #define TARGET_NR_fremovexattr		393
 #define TARGET_NR_futex			394
-#define TARGET_NR_sched_setaffinity		395     
+#define TARGET_NR_sched_setaffinity		395
 #define TARGET_NR_sched_getaffinity		396
 #define TARGET_NR_tuxcall			397
 #define TARGET_NR_io_setup			398
@@ -379,3 +379,57 @@
 #define TARGET_NR_inotify_init		444
 #define TARGET_NR_inotify_add_watch		445
 #define TARGET_NR_inotify_rm_watch		446
+#define TARGET_NR_fdatasync			447
+#define TARGET_NR_kexec_load			448
+#define TARGET_NR_migrate_pages		449
+#define TARGET_NR_openat			450
+#define TARGET_NR_mkdirat			451
+#define TARGET_NR_mknodat			452
+#define TARGET_NR_fchownat			453
+#define TARGET_NR_futimesat			454
+#define TARGET_NR_fstatat64			455
+#define TARGET_NR_unlinkat			456
+#define TARGET_NR_renameat			457
+#define TARGET_NR_linkat			458
+#define TARGET_NR_symlinkat			459
+#define TARGET_NR_readlinkat			460
+#define TARGET_NR_fchmodat			461
+#define TARGET_NR_faccessat			462
+#define TARGET_NR_pselect6			463
+#define TARGET_NR_ppoll			464
+#define TARGET_NR_unshare			465
+#define TARGET_NR_set_robust_list		466
+#define TARGET_NR_get_robust_list		467
+#define TARGET_NR_splice			468
+#define TARGET_NR_sync_file_range		469
+#define TARGET_NR_tee			470
+#define TARGET_NR_vmsplice			471
+#define TARGET_NR_move_pages			472
+#define TARGET_NR_getcpu			473
+#define TARGET_NR_epoll_pwait		474
+#define TARGET_NR_utimensat			475
+#define TARGET_NR_signalfd			476
+#define TARGET_NR_timerfd			477
+#define TARGET_NR_eventfd			478
+#define TARGET_NR_recvmmsg                      479
+#define TARGET_NR_fallocate                     480
+#define TARGET_NR_timerfd_create                481
+#define TARGET_NR_timerfd_settime               482
+#define TARGET_NR_timerfd_gettime               483
+#define TARGET_NR_signalfd4                     484
+#define TARGET_NR_eventfd2                      485
+#define TARGET_NR_epoll_create1                 486
+#define TARGET_NR_dup3                          487
+#define TARGET_NR_pipe2                         488
+#define TARGET_NR_inotify_init1                 489
+#define TARGET_NR_preadv                        490
+#define TARGET_NR_pwritev                       491
+#define TARGET_NR_rt_tgsigqueueinfo             492
+#define TARGET_NR_perf_event_open               493
+#define TARGET_NR_fanotify_init                 494
+#define TARGET_NR_fanotify_mark                 495
+#define TARGET_NR_prlimit64                     496
+#define TARGET_NR_name_to_handle_at             497
+#define TARGET_NR_open_by_handle_at             498
+#define TARGET_NR_clock_adjtime                 499
+#define TARGET_NR_syncfs                        500

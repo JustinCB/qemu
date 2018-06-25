@@ -27,11 +27,10 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#define INLINE		__inline
+#define INLINE		static inline
 #define HAS_YM3812	1
 
 #include <stdio.h>
@@ -44,6 +43,10 @@
 
 #ifndef PI
 #define PI 3.14159265358979323846
+#endif
+
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 #endif
 
 /* -------------------- for debug --------------------- */
@@ -596,14 +599,14 @@ static void init_timetables( FM_OPL *OPL , int ARRATE , int DRRATE )
 		OPL->AR_TABLE[i] = rate / ARRATE;
 		OPL->DR_TABLE[i] = rate / DRRATE;
 	}
-	for (i = 60;i < 76;i++)
+	for (i = 60; i < ARRAY_SIZE(OPL->AR_TABLE); i++)
 	{
 		OPL->AR_TABLE[i] = EG_AED-1;
 		OPL->DR_TABLE[i] = OPL->DR_TABLE[60];
 	}
 #if 0
 	for (i = 0;i < 64 ;i++){	/* make for overflow area */
-		LOG(LOG_WAR,("rate %2d , ar %f ms , dr %f ms \n",i,
+		LOG(LOG_WAR, ("rate %2d , ar %f ms , dr %f ms\n", i,
 			((double)(EG_ENT<<ENV_BITS) / OPL->AR_TABLE[i]) * (1000.0 / OPL->rate),
 			((double)(EG_ENT<<ENV_BITS) / OPL->DR_TABLE[i]) * (1000.0 / OPL->rate) ));
 	}
@@ -1343,8 +1346,9 @@ unsigned char OPLRead(FM_OPL *OPL,int a)
 		{
 			if(OPL->keyboardhandler_r)
 				return OPL->keyboardhandler_r(OPL->keyboard_param);
-			else
+			else {
 				LOG(LOG_WAR,("OPL:read unmapped KEYBOARD port\n"));
+			}
 		}
 		return 0;
 #if 0
@@ -1356,8 +1360,9 @@ unsigned char OPLRead(FM_OPL *OPL,int a)
 		{
 			if(OPL->porthandler_r)
 				return OPL->porthandler_r(OPL->port_param);
-			else
+			else {
 				LOG(LOG_WAR,("OPL:read unmapped I/O port\n"));
+			}
 		}
 		return 0;
 	case 0x1a: /* PCM-DATA    */

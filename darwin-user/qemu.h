@@ -1,12 +1,21 @@
 #ifndef GEMU_H
 #define GEMU_H
 
-#include "thunk.h"
-
 #include <signal.h>
 #include <string.h>
 
+#ifndef SA_DISABLE
+#define SA_DISABLE SS_DISABLE
+#endif
+
+#ifndef SA_ONSTACK
+#define SA_ONSTACK SS_ONSTACK
+#endif
+
+
 #include "cpu.h"
+
+#include "thunk.h"
 
 #include "gdbstub.h"
 
@@ -97,10 +106,10 @@ long do_thread_syscall(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uin
 long do_unix_syscall(void *cpu_env, int num);
 int do_sigaction(int sig, const struct sigaction *act,
                  struct sigaction *oact);
-int do_sigaltstack(const struct sigaltstack *ss, struct sigaltstack *oss);
+int do_sigaltstack(const stack_t *ss, stack_t *oss);
 
-void gemu_log(const char *fmt, ...) __attribute__((format(printf,1,2)));
-void qerror(const char *fmt, ...);
+void gemu_log(const char *fmt, ...) GCC_FMT_ATTR(1, 2);
+void qerror(const char *fmt, ...) GCC_FMT_ATTR(1, 2);
 
 void write_dt(void *ptr, unsigned long addr, unsigned long limit, int flags);
 
@@ -109,11 +118,10 @@ void cpu_loop(CPUState *env);
 void init_paths(const char *prefix);
 const char *path(const char *pathname);
 
-extern int loglevel;
-extern FILE *logfile;
+#include "qemu-log.h"
 
 /* commpage.c */
-void commpage_init();
+void commpage_init(void);
 void do_commpage(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uint32_t arg3,
                 uint32_t arg4, uint32_t arg5, uint32_t arg6, uint32_t arg7, uint32_t arg8);
 

@@ -13,8 +13,7 @@
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   along with this program; if not, see <http://www.gnu.org/licenses/>.  */
 
 #include <stdio.h>
 #include "dis-asm.h"
@@ -325,7 +324,7 @@ SH4AL-dsp                               SH4A
 
 typedef struct
 {
-  char *name;
+  const char *name;
   sh_arg_type arg[4];
   sh_nibble_type nibbles[9];
   unsigned int arch;
@@ -483,7 +482,7 @@ const sh_opcode_info sh_table[] =
 /* 0100nnnn10111010 lds <REG_N>,Y1	*/{"lds",{A_REG_N,A_Y1},{HEX_4,REG_N,HEX_B,HEX_A}, arch_sh_dsp_up},
 
 /* 0100nnnn01011010 lds <REG_N>,FPUL    */{"lds",{A_REG_M,FPUL_N},{HEX_4,REG_M,HEX_5,HEX_A}, arch_sh2e_up},
-  
+
 /* 0100nnnn01101010 lds <REG_M>,FPSCR   */{"lds",{A_REG_M,FPSCR_N},{HEX_4,REG_M,HEX_6,HEX_A}, arch_sh2e_up},
 
 /* 0100nnnn00000110 lds.l @<REG_N>+,MACH*/{"lds.l",{A_INC_N,A_MACH},{HEX_4,REG_N,HEX_0,HEX_6}, arch_sh1_up},
@@ -505,7 +504,7 @@ const sh_opcode_info sh_table[] =
 /* 0100nnnn10110110 lds.l @<REG_N>+,Y1	*/{"lds.l",{A_INC_N,A_Y1},{HEX_4,REG_N,HEX_B,HEX_6}, arch_sh_dsp_up},
 
 /* 0100nnnn01010110 lds.l @<REG_M>+,FPUL*/{"lds.l",{A_INC_M,FPUL_N},{HEX_4,REG_M,HEX_5,HEX_6}, arch_sh2e_up},
-  
+
 /* 0100nnnn01100110 lds.l @<REG_M>+,FPSCR*/{"lds.l",{A_INC_M,FPSCR_N},{HEX_4,REG_M,HEX_6,HEX_6}, arch_sh2e_up},
 
 /* 0000000000111000 ldtlb               */{"ldtlb",{0},{HEX_0,HEX_0,HEX_3,HEX_8}, arch_sh3_up},
@@ -758,7 +757,7 @@ const sh_opcode_info sh_table[] =
 /* 0000nnnn10111010 sts Y1,<REG_N>	*/{"sts",{A_Y1,A_REG_N},{HEX_0,REG_N,HEX_B,HEX_A}, arch_sh_dsp_up},
 
 /* 0000nnnn01011010 sts FPUL,<REG_N>    */{"sts",{FPUL_M,A_REG_N},{HEX_0,REG_N,HEX_5,HEX_A}, arch_sh2e_up},
-  
+
 /* 0000nnnn01101010 sts FPSCR,<REG_N>   */{"sts",{FPSCR_M,A_REG_N},{HEX_0,REG_N,HEX_6,HEX_A}, arch_sh2e_up},
 
 /* 0100nnnn00000010 sts.l MACH,@-<REG_N>*/{"sts.l",{A_MACH,A_DEC_N},{HEX_4,REG_N,HEX_0,HEX_2}, arch_sh1_up},
@@ -780,7 +779,7 @@ const sh_opcode_info sh_table[] =
 /* 0100nnnn10110110 sts.l Y1,@-<REG_N>	*/{"sts.l",{A_Y1,A_DEC_N},{HEX_4,REG_N,HEX_B,HEX_2}, arch_sh_dsp_up},
 
 /* 0100nnnn01010010 sts.l FPUL,@-<REG_N>*/{"sts.l",{FPUL_M,A_DEC_N},{HEX_4,REG_N,HEX_5,HEX_2}, arch_sh2e_up},
-  
+
 /* 0100nnnn01100010 sts.l FPSCR,@-<REG_N>*/{"sts.l",{FPSCR_M,A_DEC_N},{HEX_4,REG_N,HEX_6,HEX_2}, arch_sh2e_up},
 
 /* 0011nnnnmmmm1000 sub <REG_M>,<REG_N> */{"sub",{ A_REG_M,A_REG_N},{HEX_3,REG_N,REG_M,HEX_8}, arch_sh1_up},
@@ -1155,7 +1154,7 @@ const sh_opcode_info sh_table[] =
 /* 0011nnnnmmmm0001 1001dddddddddddd movu.w @(<DISP12>,<REG_M>),<REG_N> */
 {"movu.w",{A_DISP_REG_M,A_REG_N},{HEX_3,REG_N,REG_M,HEX_1,HEX_9,DISP0_12BY2}, arch_sh2a_nofpu_up | arch_op32},
 
-{ 0, {0}, {0}, 0 } 
+{ 0, {0}, {0}, 0 }
 };
 
 #endif
@@ -1164,18 +1163,9 @@ const sh_opcode_info sh_table[] =
 #define INCLUDE_SHMEDIA
 #endif
 
-static void print_movxy
-  PARAMS ((const sh_opcode_info *, int, int, fprintf_ftype, void *));
-static void print_insn_ddt PARAMS ((int, struct disassemble_info *));
-static void print_dsp_reg PARAMS ((int, fprintf_ftype, void *));
-static void print_insn_ppi PARAMS ((int, struct disassemble_info *));
-
 static void
-print_movxy (op, rn, rm, fprintf_fn, stream)
-     const sh_opcode_info *op;
-     int rn, rm;
-     fprintf_ftype fprintf_fn;
-     void *stream;
+print_movxy (const sh_opcode_info *op, int rn, int rm,
+             fprintf_function fprintf_fn, void *stream)
 {
   int n;
 
@@ -1249,11 +1239,9 @@ print_movxy (op, rn, rm, fprintf_fn, stream)
    Return nonzero if a field b of a parallel processing insns follows.  */
 
 static void
-print_insn_ddt (insn, info)
-     int insn;
-     struct disassemble_info *info;
+print_insn_ddt (int insn, struct disassemble_info *info)
 {
-  fprintf_ftype fprintf_fn = info->fprintf_func;
+  fprintf_function fprintf_fn = info->fprintf_func;
   void *stream = info->stream;
 
   /* If this is just a nop, make sure to emit something.  */
@@ -1293,7 +1281,7 @@ print_insn_ddt (insn, info)
 	while (op->nibbles[2] != (unsigned) ((insn >> 4) & 3)
 	       || op->nibbles[3] != (unsigned) (insn & 0xf))
 	  op++;
-	
+
 	print_movxy (op,
 		     (4 * ((insn & (is_movy ? 0x200 : 0x100)) == 0)
 		      + 2 * is_movy
@@ -1338,10 +1326,7 @@ print_insn_ddt (insn, info)
 }
 
 static void
-print_dsp_reg (rm, fprintf_fn, stream)
-     int rm;
-     fprintf_ftype fprintf_fn;
-     void *stream;
+print_dsp_reg (int rm, fprintf_function fprintf_fn, void *stream)
 {
   switch (rm)
     {
@@ -1382,17 +1367,15 @@ print_dsp_reg (rm, fprintf_fn, stream)
 }
 
 static void
-print_insn_ppi (field_b, info)
-     int field_b;
-     struct disassemble_info *info;
+print_insn_ppi (int field_b, struct disassemble_info *info)
 {
-  static char *sx_tab[] = { "x0", "x1", "a0", "a1" };
-  static char *sy_tab[] = { "y0", "y1", "m0", "m1" };
-  fprintf_ftype fprintf_fn = info->fprintf_func;
+  static const char *sx_tab[] = { "x0", "x1", "a0", "a1" };
+  static const char *sy_tab[] = { "y0", "y1", "m0", "m1" };
+  fprintf_function fprintf_fn = info->fprintf_func;
   void *stream = info->stream;
   unsigned int nib1, nib2, nib3;
   unsigned int altnib1, nib4;
-  char *dc = NULL;
+  const char *dc = NULL;
   const sh_opcode_info *op;
 
   if ((field_b & 0xe800) == 0)
@@ -1405,10 +1388,10 @@ print_insn_ppi (field_b, info)
     }
   if ((field_b & 0xc000) == 0x4000 && (field_b & 0x3000) != 0x1000)
     {
-      static char *du_tab[] = { "x0", "y0", "a0", "a1" };
-      static char *se_tab[] = { "x0", "x1", "y0", "a1" };
-      static char *sf_tab[] = { "y0", "y1", "x0", "a1" };
-      static char *sg_tab[] = { "m0", "m1", "a0", "a1" };
+      static const char *du_tab[] = { "x0", "y0", "a0", "a1" };
+      static const char *se_tab[] = { "x0", "x1", "y0", "a1" };
+      static const char *sf_tab[] = { "y0", "y1", "x0", "a1" };
+      static const char *sg_tab[] = { "m0", "m1", "a0", "a1" };
 
       if (field_b & 0x2000)
 	{
@@ -1504,10 +1487,10 @@ print_insn_ppi (field_b, info)
 		  print_dsp_reg (field_b & 0xf, fprintf_fn, stream);
 		  break;
 		case DSP_REG_X:
-		  fprintf_fn (stream, sx_tab[(field_b >> 6) & 3]);
+		  fprintf_fn (stream, "%s", sx_tab[(field_b >> 6) & 3]);
 		  break;
 		case DSP_REG_Y:
-		  fprintf_fn (stream, sy_tab[(field_b >> 4) & 3]);
+		  fprintf_fn (stream, "%s", sy_tab[(field_b >> 4) & 3]);
 		  break;
 		case A_MACH:
 		  fprintf_fn (stream, "mach");
@@ -1529,11 +1512,9 @@ print_insn_ppi (field_b, info)
 /* FIXME mvs: movx insns print as ".word 0x%03x", insn & 0xfff
    (ie. the upper nibble is missing).  */
 int
-print_insn_sh (memaddr, info)
-     bfd_vma memaddr;
-     struct disassemble_info *info;
+print_insn_sh (bfd_vma memaddr, struct disassemble_info *info)
 {
-  fprintf_ftype fprintf_fn = info->fprintf_func;
+  fprintf_function fprintf_fn = info->fprintf_func;
   void *stream = info->stream;
   unsigned char insn[4];
   unsigned char nibs[8];
@@ -2078,7 +2059,7 @@ print_insn_sh (memaddr, info)
 		}
 	      if ((*info->symbol_at_address_func) (val, info))
 		{
-		  fprintf_fn (stream, "\t! 0x");
+		  fprintf_fn (stream, "\t! ");
 		  (*info->print_address_func) (val, info);
 		}
 	      else

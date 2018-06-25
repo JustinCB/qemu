@@ -2,7 +2,7 @@
  * QEMU Common PCI Host bridge configuration data space access routines.
  *
  * Copyright (c) 2006 Fabrice Bellard
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
@@ -25,69 +25,32 @@
 /* Worker routines for a PCI host controller that uses an {address,data}
    register pair to access PCI configuration space.  */
 
-typedef struct {
+#ifndef PCI_HOST_H
+#define PCI_HOST_H
+
+#include "sysbus.h"
+
+struct PCIHostState {
+    SysBusDevice busdev;
+    MemoryRegion conf_mem;
+    MemoryRegion data_mem;
+    MemoryRegion *address_space;
     uint32_t config_reg;
     PCIBus *bus;
-} PCIHostState;
+};
 
-static void pci_host_data_writeb(void* opaque, pci_addr_t addr, uint32_t val)
-{
-    PCIHostState *s = opaque;
-    if (s->config_reg & (1u << 31))
-        pci_data_write(s->bus, s->config_reg | (addr & 3), val, 1);
-}
+/* common internal helpers for PCI/PCIe hosts, cut off overflows */
+void pci_host_config_write_common(PCIDevice *pci_dev, uint32_t addr,
+                                  uint32_t limit, uint32_t val, uint32_t len);
+uint32_t pci_host_config_read_common(PCIDevice *pci_dev, uint32_t addr,
+                                     uint32_t limit, uint32_t len);
 
-static void pci_host_data_writew(void* opaque, pci_addr_t addr, uint32_t val)
-{
-    PCIHostState *s = opaque;
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap16(val);
-#endif
-    if (s->config_reg & (1u << 31))
-        pci_data_write(s->bus, s->config_reg | (addr & 3), val, 2);
-}
+void pci_data_write(PCIBus *s, uint32_t addr, uint32_t val, int len);
+uint32_t pci_data_read(PCIBus *s, uint32_t addr, int len);
 
-static void pci_host_data_writel(void* opaque, pci_addr_t addr, uint32_t val)
-{
-    PCIHostState *s = opaque;
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap32(val);
-#endif
-    if (s->config_reg & (1u << 31))
-        pci_data_write(s->bus, s->config_reg, val, 4);
-}
+extern const MemoryRegionOps pci_host_conf_le_ops;
+extern const MemoryRegionOps pci_host_conf_be_ops;
+extern const MemoryRegionOps pci_host_data_le_ops;
+extern const MemoryRegionOps pci_host_data_be_ops;
 
-static uint32_t pci_host_data_readb(void* opaque, pci_addr_t addr)
-{
-    PCIHostState *s = opaque;
-    if (!(s->config_reg & (1 << 31)))
-        return 0xff;
-    return pci_data_read(s->bus, s->config_reg | (addr & 3), 1);
-}
-
-static uint32_t pci_host_data_readw(void* opaque, pci_addr_t addr)
-{
-    PCIHostState *s = opaque;
-    uint32_t val;
-    if (!(s->config_reg & (1 << 31)))
-        return 0xffff;
-    val = pci_data_read(s->bus, s->config_reg | (addr & 3), 2);
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap16(val);
-#endif
-    return val;
-}
-
-static uint32_t pci_host_data_readl(void* opaque, pci_addr_t addr)
-{
-    PCIHostState *s = opaque;
-    uint32_t val;
-    if (!(s->config_reg & (1 << 31)))
-        return 0xffffffff;
-    val = pci_data_read(s->bus, s->config_reg | (addr & 3), 4);
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap32(val);
-#endif
-    return val;
-}
-
+#endif /* PCI_HOST_H */

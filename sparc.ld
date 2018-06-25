@@ -1,19 +1,18 @@
 OUTPUT_FORMAT("elf32-sparc", "elf32-sparc",
-	      "elf32-sparc")
+              "elf32-sparc")
 OUTPUT_ARCH(sparc)
-SEARCH_DIR(/lib); SEARCH_DIR(/usr/lib); SEARCH_DIR(/usr/local/lib); SEARCH_DIR(/usr/alpha-unknown-linux-gnu/lib);
 ENTRY(_start)
 SECTIONS
 {
   /* Read-only sections, merged into text segment: */
   . = 0x60000000 + SIZEOF_HEADERS;
-  .interp     : { *(.interp) 	}
-  .hash          : { *(.hash)		}
-  .dynsym        : { *(.dynsym)		}
-  .dynstr        : { *(.dynstr)		}
-  .gnu.version   : { *(.gnu.version)	}
-  .gnu.version_d   : { *(.gnu.version_d)	}
-  .gnu.version_r   : { *(.gnu.version_r)	}
+  .interp     : { *(.interp)    }
+  .hash          : { *(.hash)           }
+  .dynsym        : { *(.dynsym)         }
+  .dynstr        : { *(.dynstr)         }
+  .gnu.version   : { *(.gnu.version)    }
+  .gnu.version_d   : { *(.gnu.version_d)        }
+  .gnu.version_r   : { *(.gnu.version_r)        }
   .rel.text      :
     { *(.rel.text) *(.rel.gnu.linkonce.t*) }
   .rela.text     :
@@ -26,21 +25,21 @@ SECTIONS
     { *(.rel.rodata) *(.rel.gnu.linkonce.r*) }
   .rela.rodata   :
     { *(.rela.rodata) *(.rela.gnu.linkonce.r*) }
-  .rel.got       : { *(.rel.got)		}
-  .rela.got      : { *(.rela.got)		}
-  .rel.ctors     : { *(.rel.ctors)	}
-  .rela.ctors    : { *(.rela.ctors)	}
-  .rel.dtors     : { *(.rel.dtors)	}
-  .rela.dtors    : { *(.rela.dtors)	}
-  .rel.init      : { *(.rel.init)	}
-  .rela.init     : { *(.rela.init)	}
-  .rel.fini      : { *(.rel.fini)	}
-  .rela.fini     : { *(.rela.fini)	}
-  .rel.bss       : { *(.rel.bss)		}
-  .rela.bss      : { *(.rela.bss)		}
-  .rel.plt       : { *(.rel.plt)		}
-  .rela.plt      : { *(.rela.plt)		}
-  .init          : { *(.init)	} =0x47ff041f
+  .rel.got       : { *(.rel.got)                }
+  .rela.got      : { *(.rela.got)               }
+  .rel.ctors     : { *(.rel.ctors)      }
+  .rela.ctors    : { *(.rela.ctors)     }
+  .rel.dtors     : { *(.rel.dtors)      }
+  .rela.dtors    : { *(.rela.dtors)     }
+  .rel.init      : { *(.rel.init)       }
+  .rela.init     : { *(.rela.init)      }
+  .rel.fini      : { *(.rel.fini)       }
+  .rela.fini     : { *(.rela.fini)      }
+  .rel.bss       : { *(.rel.bss)                }
+  .rela.bss      : { *(.rela.bss)               }
+  .rel.plt       : { *(.rel.plt)                }
+  .rela.plt      : { *(.rela.plt)               }
+  .init          : { *(.init)   } =0x47ff041f
   .text      :
   {
     *(.text)
@@ -66,6 +65,26 @@ SECTIONS
   .data1   : { *(.data1) }
   .tdata    : { *(.tdata) }
   .tbss    : { *(.tbss) }
+  .preinit_array     :
+  {
+    PROVIDE (__preinit_array_start = .);
+    KEEP (*(.preinit_array))
+    PROVIDE (__preinit_array_end = .);
+  }
+  .init_array     :
+  {
+     PROVIDE (__init_array_start = .);
+     KEEP (*(SORT(.init_array.*)))
+     KEEP (*(.init_array))
+     PROVIDE (__init_array_end = .);
+  }
+  .fini_array     :
+  {
+    PROVIDE (__fini_array_start = .);
+    KEEP (*(.fini_array))
+    KEEP (*(SORT(.fini_array.*)))
+    PROVIDE (__fini_array_end = .);
+  }
   .ctors         :
   {
     *(.ctors)
@@ -74,7 +93,7 @@ SECTIONS
   {
     *(.dtors)
   }
-  .plt      : { *(.plt)	}
+  .plt      : { *(.plt) }
   .got           : { *(.got.plt) *(.got) }
   .dynamic       : { *(.dynamic) }
   /* We want the small data sections together, so single-instruction offsets

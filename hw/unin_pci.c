@@ -2,7 +2,7 @@
  * QEMU Uninorth PCI host (for all Mac99 and newer machines)
  *
  * Copyright (c) 2006 Fabrice Bellard
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
@@ -21,248 +21,373 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "vl.h"
-typedef target_phys_addr_t pci_addr_t;
+#include "hw.h"
+#include "ppc_mac.h"
+#include "pci.h"
 #include "pci_host.h"
 
-typedef PCIHostState UNINState;
+/* debug UniNorth */
+//#define DEBUG_UNIN
 
-static void pci_unin_main_config_writel (void *opaque, target_phys_addr_t addr,
-                                         uint32_t val)
-{
-    UNINState *s = opaque;
-    int i;
-
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap32(val);
-#endif
-
-    for (i = 11; i < 32; i++) {
-        if ((val & (1 << i)) != 0)
-            break;
-    }
-#if 0
-    s->config_reg = 0x80000000 | (1 << 16) | (val & 0x7FC) | (i << 11);
+#ifdef DEBUG_UNIN
+#define UNIN_DPRINTF(fmt, ...)                                  \
+    do { printf("UNIN: " fmt , ## __VA_ARGS__); } while (0)
 #else
-    s->config_reg = 0x80000000 | (0 << 16) | (val & 0x7FC) | (i << 11);
-#endif
-}
-
-static uint32_t pci_unin_main_config_readl (void *opaque,
-                                            target_phys_addr_t addr)
-{
-    UNINState *s = opaque;
-    uint32_t val;
-    int devfn;
-
-    devfn = (s->config_reg >> 8) & 0xFF;
-    val = (1 << (devfn >> 3)) | ((devfn & 0x07) << 8) | (s->config_reg & 0xFC);
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap32(val);
+#define UNIN_DPRINTF(fmt, ...)
 #endif
 
-    return val;
-}
+static const int unin_irq_line[] = { 0x1b, 0x1c, 0x1d, 0x1e };
 
-static CPUWriteMemoryFunc *pci_unin_main_config_write[] = {
-    &pci_unin_main_config_writel,
-    &pci_unin_main_config_writel,
-    &pci_unin_main_config_writel,
-};
+typedef struct UNINState {
+    SysBusDevice busdev;
+    PCIHostState host_state;
+    MemoryRegion pci_mmio;
+    MemoryRegion pci_hole;
+} UNINState;
 
-static CPUReadMemoryFunc *pci_unin_main_config_read[] = {
-    &pci_unin_main_config_readl,
-    &pci_unin_main_config_readl,
-    &pci_unin_main_config_readl,
-};
-
-static CPUWriteMemoryFunc *pci_unin_main_write[] = {
-    &pci_host_data_writeb,
-    &pci_host_data_writew,
-    &pci_host_data_writel,
-};
-
-static CPUReadMemoryFunc *pci_unin_main_read[] = {
-    &pci_host_data_readb,
-    &pci_host_data_readw,
-    &pci_host_data_readl,
-};
-
-#if 0
-
-static void pci_unin_config_writel (void *opaque, target_phys_addr_t addr,
-                                    uint32_t val)
-{
-    UNINState *s = opaque;
-
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap32(val);
-#endif
-    s->config_reg = 0x80000000 | (val & ~0x00000001);
-}
-
-static uint32_t pci_unin_config_readl (void *opaque,
-                                       target_phys_addr_t addr)
-{
-    UNINState *s = opaque;
-    uint32_t val;
-
-    val = (s->config_reg | 0x00000001) & ~0x80000000;
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap32(val);
-#endif
-
-    return val;
-}
-
-static CPUWriteMemoryFunc *pci_unin_config_write[] = {
-    &pci_unin_config_writel,
-    &pci_unin_config_writel,
-    &pci_unin_config_writel,
-};
-
-static CPUReadMemoryFunc *pci_unin_config_read[] = {
-    &pci_unin_config_readl,
-    &pci_unin_config_readl,
-    &pci_unin_config_readl,
-};
-
-static CPUWriteMemoryFunc *pci_unin_write[] = {
-    &pci_host_pci_writeb,
-    &pci_host_pci_writew,
-    &pci_host_pci_writel,
-};
-
-static CPUReadMemoryFunc *pci_unin_read[] = {
-    &pci_host_pci_readb,
-    &pci_host_pci_readw,
-    &pci_host_pci_readl,
-};
-#endif
-
-/* Don't know if this matches real hardware, but it agrees with OHW.  */
 static int pci_unin_map_irq(PCIDevice *pci_dev, int irq_num)
 {
-    return (irq_num + (pci_dev->devfn >> 3)) & 3;
+    int retval;
+    int devfn = pci_dev->devfn & 0x00FFFFFF;
+
+    retval = (((devfn >> 11) & 0x1F) + irq_num) & 3;
+
+    return retval;
 }
 
-static void pci_unin_set_irq(qemu_irq *pic, int irq_num, int level)
+static void pci_unin_set_irq(void *opaque, int irq_num, int level)
 {
-    qemu_set_irq(pic[irq_num + 8], level);
+    qemu_irq *pic = opaque;
+
+    UNIN_DPRINTF("%s: setting INT %d = %d\n", __func__,
+                 unin_irq_line[irq_num], level);
+    qemu_set_irq(pic[unin_irq_line[irq_num]], level);
 }
 
-PCIBus *pci_pmac_init(qemu_irq *pic)
+static void pci_unin_reset(void *opaque)
+{
+}
+
+static uint32_t unin_get_config_reg(uint32_t reg, uint32_t addr)
+{
+    uint32_t retval;
+
+    if (reg & (1u << 31)) {
+        /* XXX OpenBIOS compatibility hack */
+        retval = reg | (addr & 3);
+    } else if (reg & 1) {
+        /* CFA1 style */
+        retval = (reg & ~7u) | (addr & 7);
+    } else {
+        uint32_t slot, func;
+
+        /* Grab CFA0 style values */
+        slot = ffs(reg & 0xfffff800) - 1;
+        func = (reg >> 8) & 7;
+
+        /* ... and then convert them to x86 format */
+        /* config pointer */
+        retval = (reg & (0xff - 7)) | (addr & 7);
+        /* slot */
+        retval |= slot << 11;
+        /* fn */
+        retval |= func << 8;
+    }
+
+
+    UNIN_DPRINTF("Converted config space accessor %08x/%08x -> %08x\n",
+                 reg, addr, retval);
+
+    return retval;
+}
+
+static void unin_data_write(void *opaque, target_phys_addr_t addr,
+                            uint64_t val, unsigned len)
+{
+    UNINState *s = opaque;
+    UNIN_DPRINTF("write addr %" TARGET_FMT_plx " len %d val %"PRIx64"\n",
+                 addr, len, val);
+    pci_data_write(s->host_state.bus,
+                   unin_get_config_reg(s->host_state.config_reg, addr),
+                   val, len);
+}
+
+static uint64_t unin_data_read(void *opaque, target_phys_addr_t addr,
+                               unsigned len)
+{
+    UNINState *s = opaque;
+    uint32_t val;
+
+    val = pci_data_read(s->host_state.bus,
+                        unin_get_config_reg(s->host_state.config_reg, addr),
+                        len);
+    UNIN_DPRINTF("read addr %" TARGET_FMT_plx " len %d val %x\n",
+                 addr, len, val);
+    return val;
+}
+
+static const MemoryRegionOps unin_data_ops = {
+    .read = unin_data_read,
+    .write = unin_data_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+
+static int pci_unin_main_init_device(SysBusDevice *dev)
 {
     UNINState *s;
-    PCIDevice *d;
-    int pci_mem_config, pci_mem_data;
 
     /* Use values found on a real PowerMac */
     /* Uninorth main bus */
-    s = qemu_mallocz(sizeof(UNINState));
-    s->bus = pci_register_bus(pci_unin_set_irq, pci_unin_map_irq,
-                              pic, 11 << 3, 4);
+    s = FROM_SYSBUS(UNINState, dev);
 
-    pci_mem_config = cpu_register_io_memory(0, pci_unin_main_config_read, 
-                                            pci_unin_main_config_write, s);
-    pci_mem_data = cpu_register_io_memory(0, pci_unin_main_read,
-                                          pci_unin_main_write, s);
-    cpu_register_physical_memory(0xf2800000, 0x1000, pci_mem_config);
-    cpu_register_physical_memory(0xf2c00000, 0x1000, pci_mem_data);
-    d = pci_register_device(s->bus, "Uni-north main", sizeof(PCIDevice), 
-                            11 << 3, NULL, NULL);
-    d->config[0x00] = 0x6b; // vendor_id : Apple
-    d->config[0x01] = 0x10;
-    d->config[0x02] = 0x1F; // device_id
-    d->config[0x03] = 0x00;
-    d->config[0x08] = 0x00; // revision
-    d->config[0x0A] = 0x00; // class_sub = pci host
-    d->config[0x0B] = 0x06; // class_base = PCI_bridge
-    d->config[0x0C] = 0x08; // cache_line_size
-    d->config[0x0D] = 0x10; // latency_timer
-    d->config[0x0E] = 0x00; // header_type
-    d->config[0x34] = 0x00; // capabilities_pointer
+    memory_region_init_io(&s->host_state.conf_mem, &pci_host_conf_le_ops,
+                          &s->host_state, "pci-conf-idx", 0x1000);
+    memory_region_init_io(&s->host_state.data_mem, &unin_data_ops, s,
+                          "pci-conf-data", 0x1000);
+    sysbus_init_mmio_region(dev, &s->host_state.conf_mem);
+    sysbus_init_mmio_region(dev, &s->host_state.data_mem);
 
-#if 0 // XXX: not activated as PPC BIOS doesn't handle multiple buses properly
-    /* pci-to-pci bridge */
-    d = pci_register_device("Uni-north bridge", sizeof(PCIDevice), 0, 13 << 3,
-                            NULL, NULL);
-    d->config[0x00] = 0x11; // vendor_id : TI
-    d->config[0x01] = 0x10;
-    d->config[0x02] = 0x26; // device_id
-    d->config[0x03] = 0x00;
-    d->config[0x08] = 0x05; // revision
-    d->config[0x0A] = 0x04; // class_sub = pci2pci
-    d->config[0x0B] = 0x06; // class_base = PCI_bridge
-    d->config[0x0C] = 0x08; // cache_line_size
-    d->config[0x0D] = 0x20; // latency_timer
-    d->config[0x0E] = 0x01; // header_type
-
-    d->config[0x18] = 0x01; // primary_bus
-    d->config[0x19] = 0x02; // secondary_bus
-    d->config[0x1A] = 0x02; // subordinate_bus
-    d->config[0x1B] = 0x20; // secondary_latency_timer
-    d->config[0x1C] = 0x11; // io_base
-    d->config[0x1D] = 0x01; // io_limit
-    d->config[0x20] = 0x00; // memory_base
-    d->config[0x21] = 0x80;
-    d->config[0x22] = 0x00; // memory_limit
-    d->config[0x23] = 0x80;
-    d->config[0x24] = 0x01; // prefetchable_memory_base
-    d->config[0x25] = 0x80;
-    d->config[0x26] = 0xF1; // prefectchable_memory_limit
-    d->config[0x27] = 0x7F;
-    // d->config[0x34] = 0xdc // capabilities_pointer
-#endif
-#if 0 // XXX: not needed for now
-    /* Uninorth AGP bus */
-    s = &pci_bridge[1];
-    pci_mem_config = cpu_register_io_memory(0, pci_unin_config_read, 
-                                            pci_unin_config_write, s);
-    pci_mem_data = cpu_register_io_memory(0, pci_unin_read,
-                                          pci_unin_write, s);
-    cpu_register_physical_memory(0xf0800000, 0x1000, pci_mem_config);
-    cpu_register_physical_memory(0xf0c00000, 0x1000, pci_mem_data);
-
-    d = pci_register_device("Uni-north AGP", sizeof(PCIDevice), 0, 11 << 3,
-                            NULL, NULL);
-    d->config[0x00] = 0x6b; // vendor_id : Apple
-    d->config[0x01] = 0x10;
-    d->config[0x02] = 0x20; // device_id
-    d->config[0x03] = 0x00;
-    d->config[0x08] = 0x00; // revision
-    d->config[0x0A] = 0x00; // class_sub = pci host
-    d->config[0x0B] = 0x06; // class_base = PCI_bridge
-    d->config[0x0C] = 0x08; // cache_line_size
-    d->config[0x0D] = 0x10; // latency_timer
-    d->config[0x0E] = 0x00; // header_type
-    //    d->config[0x34] = 0x80; // capabilities_pointer
-#endif
-
-#if 0 // XXX: not needed for now
-    /* Uninorth internal bus */
-    s = &pci_bridge[2];
-    pci_mem_config = cpu_register_io_memory(0, pci_unin_config_read, 
-                                            pci_unin_config_write, s);
-    pci_mem_data = cpu_register_io_memory(0, pci_unin_read,
-                                          pci_unin_write, s);
-    cpu_register_physical_memory(0xf4800000, 0x1000, pci_mem_config);
-    cpu_register_physical_memory(0xf4c00000, 0x1000, pci_mem_data);
-
-    d = pci_register_device("Uni-north internal", sizeof(PCIDevice),
-                            3, 11 << 3, NULL, NULL);
-    d->config[0x00] = 0x6b; // vendor_id : Apple
-    d->config[0x01] = 0x10;
-    d->config[0x02] = 0x1E; // device_id
-    d->config[0x03] = 0x00;
-    d->config[0x08] = 0x00; // revision
-    d->config[0x0A] = 0x00; // class_sub = pci host
-    d->config[0x0B] = 0x06; // class_base = PCI_bridge
-    d->config[0x0C] = 0x08; // cache_line_size
-    d->config[0x0D] = 0x10; // latency_timer
-    d->config[0x0E] = 0x00; // header_type
-    d->config[0x34] = 0x00; // capabilities_pointer
-#endif
-    return s->bus;
+    qemu_register_reset(pci_unin_reset, &s->host_state);
+    return 0;
 }
 
+
+static int pci_u3_agp_init_device(SysBusDevice *dev)
+{
+    UNINState *s;
+
+    /* Uninorth U3 AGP bus */
+    s = FROM_SYSBUS(UNINState, dev);
+
+    memory_region_init_io(&s->host_state.conf_mem, &pci_host_conf_le_ops,
+                          &s->host_state, "pci-conf-idx", 0x1000);
+    memory_region_init_io(&s->host_state.data_mem, &unin_data_ops, s,
+                          "pci-conf-data", 0x1000);
+    sysbus_init_mmio_region(dev, &s->host_state.conf_mem);
+    sysbus_init_mmio_region(dev, &s->host_state.data_mem);
+
+    qemu_register_reset(pci_unin_reset, &s->host_state);
+
+    return 0;
+}
+
+static int pci_unin_agp_init_device(SysBusDevice *dev)
+{
+    UNINState *s;
+
+    /* Uninorth AGP bus */
+    s = FROM_SYSBUS(UNINState, dev);
+
+    memory_region_init_io(&s->host_state.conf_mem, &pci_host_conf_le_ops,
+                          &s->host_state, "pci-conf-idx", 0x1000);
+    memory_region_init_io(&s->host_state.data_mem, &pci_host_data_le_ops,
+                          &s->host_state, "pci-conf-data", 0x1000);
+    sysbus_init_mmio_region(dev, &s->host_state.conf_mem);
+    sysbus_init_mmio_region(dev, &s->host_state.data_mem);
+    return 0;
+}
+
+static int pci_unin_internal_init_device(SysBusDevice *dev)
+{
+    UNINState *s;
+
+    /* Uninorth internal bus */
+    s = FROM_SYSBUS(UNINState, dev);
+
+    memory_region_init_io(&s->host_state.conf_mem, &pci_host_conf_le_ops,
+                          &s->host_state, "pci-conf-idx", 0x1000);
+    memory_region_init_io(&s->host_state.data_mem, &pci_host_data_le_ops,
+                          &s->host_state, "pci-conf-data", 0x1000);
+    sysbus_init_mmio_region(dev, &s->host_state.conf_mem);
+    sysbus_init_mmio_region(dev, &s->host_state.data_mem);
+    return 0;
+}
+
+PCIBus *pci_pmac_init(qemu_irq *pic,
+                      MemoryRegion *address_space_mem,
+                      MemoryRegion *address_space_io)
+{
+    DeviceState *dev;
+    SysBusDevice *s;
+    UNINState *d;
+
+    /* Use values found on a real PowerMac */
+    /* Uninorth main bus */
+    dev = qdev_create(NULL, "uni-north");
+    qdev_init_nofail(dev);
+    s = sysbus_from_qdev(dev);
+    d = FROM_SYSBUS(UNINState, s);
+    memory_region_init(&d->pci_mmio, "pci-mmio", 0x100000000ULL);
+    memory_region_init_alias(&d->pci_hole, "pci-hole", &d->pci_mmio,
+                             0x80000000ULL, 0x70000000ULL);
+    memory_region_add_subregion(address_space_mem, 0x80000000ULL,
+                                &d->pci_hole);
+
+    d->host_state.bus = pci_register_bus(&d->busdev.qdev, "pci",
+                                         pci_unin_set_irq, pci_unin_map_irq,
+                                         pic,
+                                         &d->pci_mmio,
+                                         address_space_io,
+                                         PCI_DEVFN(11, 0), 4);
+
+#if 0
+    pci_create_simple(d->host_state.bus, PCI_DEVFN(11, 0), "uni-north");
+#endif
+
+    sysbus_mmio_map(s, 0, 0xf2800000);
+    sysbus_mmio_map(s, 1, 0xf2c00000);
+
+    /* DEC 21154 bridge */
+#if 0
+    /* XXX: not activated as PPC BIOS doesn't handle multiple buses properly */
+    pci_create_simple(d->host_state.bus, PCI_DEVFN(12, 0), "dec-21154");
+#endif
+
+    /* Uninorth AGP bus */
+    pci_create_simple(d->host_state.bus, PCI_DEVFN(11, 0), "uni-north-agp");
+    dev = qdev_create(NULL, "uni-north-agp");
+    qdev_init_nofail(dev);
+    s = sysbus_from_qdev(dev);
+    sysbus_mmio_map(s, 0, 0xf0800000);
+    sysbus_mmio_map(s, 1, 0xf0c00000);
+
+    /* Uninorth internal bus */
+#if 0
+    /* XXX: not needed for now */
+    pci_create_simple(d->host_state.bus, PCI_DEVFN(14, 0), "uni-north-pci");
+    dev = qdev_create(NULL, "uni-north-pci");
+    qdev_init_nofail(dev);
+    s = sysbus_from_qdev(dev);
+    sysbus_mmio_map(s, 0, 0xf4800000);
+    sysbus_mmio_map(s, 1, 0xf4c00000);
+#endif
+
+    return d->host_state.bus;
+}
+
+PCIBus *pci_pmac_u3_init(qemu_irq *pic,
+                         MemoryRegion *address_space_mem,
+                         MemoryRegion *address_space_io)
+{
+    DeviceState *dev;
+    SysBusDevice *s;
+    UNINState *d;
+
+    /* Uninorth AGP bus */
+
+    dev = qdev_create(NULL, "u3-agp");
+    qdev_init_nofail(dev);
+    s = sysbus_from_qdev(dev);
+    d = FROM_SYSBUS(UNINState, s);
+
+    memory_region_init(&d->pci_mmio, "pci-mmio", 0x100000000ULL);
+    memory_region_init_alias(&d->pci_hole, "pci-hole", &d->pci_mmio,
+                             0x80000000ULL, 0x70000000ULL);
+    memory_region_add_subregion(address_space_mem, 0x80000000ULL,
+                                &d->pci_hole);
+
+    d->host_state.bus = pci_register_bus(&d->busdev.qdev, "pci",
+                                         pci_unin_set_irq, pci_unin_map_irq,
+                                         pic,
+                                         &d->pci_mmio,
+                                         address_space_io,
+                                         PCI_DEVFN(11, 0), 4);
+
+    sysbus_mmio_map(s, 0, 0xf0800000);
+    sysbus_mmio_map(s, 1, 0xf0c00000);
+
+    pci_create_simple(d->host_state.bus, 11 << 3, "u3-agp");
+
+    return d->host_state.bus;
+}
+
+static int unin_main_pci_host_init(PCIDevice *d)
+{
+    d->config[0x0C] = 0x08; // cache_line_size
+    d->config[0x0D] = 0x10; // latency_timer
+    d->config[0x34] = 0x00; // capabilities_pointer
+    return 0;
+}
+
+static int unin_agp_pci_host_init(PCIDevice *d)
+{
+    d->config[0x0C] = 0x08; // cache_line_size
+    d->config[0x0D] = 0x10; // latency_timer
+    //    d->config[0x34] = 0x80; // capabilities_pointer
+    return 0;
+}
+
+static int u3_agp_pci_host_init(PCIDevice *d)
+{
+    /* cache line size */
+    d->config[0x0C] = 0x08;
+    /* latency timer */
+    d->config[0x0D] = 0x10;
+    return 0;
+}
+
+static int unin_internal_pci_host_init(PCIDevice *d)
+{
+    d->config[0x0C] = 0x08; // cache_line_size
+    d->config[0x0D] = 0x10; // latency_timer
+    d->config[0x34] = 0x00; // capabilities_pointer
+    return 0;
+}
+
+static PCIDeviceInfo unin_main_pci_host_info = {
+    .qdev.name = "uni-north",
+    .qdev.size = sizeof(PCIDevice),
+    .init      = unin_main_pci_host_init,
+    .vendor_id = PCI_VENDOR_ID_APPLE,
+    .device_id = PCI_DEVICE_ID_APPLE_UNI_N_PCI,
+    .revision  = 0x00,
+    .class_id  = PCI_CLASS_BRIDGE_HOST,
+};
+
+static PCIDeviceInfo u3_agp_pci_host_info = {
+    .qdev.name = "u3-agp",
+    .qdev.size = sizeof(PCIDevice),
+    .init      = u3_agp_pci_host_init,
+    .vendor_id = PCI_VENDOR_ID_APPLE,
+    .device_id = PCI_DEVICE_ID_APPLE_U3_AGP,
+    .revision  = 0x00,
+    .class_id  = PCI_CLASS_BRIDGE_HOST,
+};
+
+static PCIDeviceInfo unin_agp_pci_host_info = {
+    .qdev.name = "uni-north-agp",
+    .qdev.size = sizeof(PCIDevice),
+    .init      = unin_agp_pci_host_init,
+    .vendor_id = PCI_VENDOR_ID_APPLE,
+    .device_id = PCI_DEVICE_ID_APPLE_UNI_N_AGP,
+    .revision  = 0x00,
+    .class_id  = PCI_CLASS_BRIDGE_HOST,
+};
+
+static PCIDeviceInfo unin_internal_pci_host_info = {
+    .qdev.name = "uni-north-pci",
+    .qdev.size = sizeof(PCIDevice),
+    .init      = unin_internal_pci_host_init,
+    .vendor_id = PCI_VENDOR_ID_APPLE,
+    .device_id = PCI_DEVICE_ID_APPLE_UNI_N_I_PCI,
+    .revision  = 0x00,
+    .class_id  = PCI_CLASS_BRIDGE_HOST,
+};
+
+static void unin_register_devices(void)
+{
+    sysbus_register_dev("uni-north", sizeof(UNINState),
+                        pci_unin_main_init_device);
+    pci_qdev_register(&unin_main_pci_host_info);
+    sysbus_register_dev("u3-agp", sizeof(UNINState),
+                        pci_u3_agp_init_device);
+    pci_qdev_register(&u3_agp_pci_host_info);
+    sysbus_register_dev("uni-north-agp", sizeof(UNINState),
+                        pci_unin_agp_init_device);
+    pci_qdev_register(&unin_agp_pci_host_info);
+    sysbus_register_dev("uni-north-pci", sizeof(UNINState),
+                        pci_unin_internal_init_device);
+    pci_qdev_register(&unin_internal_pci_host_info);
+}
+
+device_init(unin_register_devices)

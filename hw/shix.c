@@ -1,8 +1,8 @@
 /*
  * SHIX 2.0 board description
- * 
+ *
  * Copyright (c) 2005 Samuel Tardieu
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
@@ -21,58 +21,35 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-/* 
+/*
    Shix 2.0 board by Alexis Polti, described at
    http://perso.enst.fr/~polti/realisations/shix20/
 
    More information in target-sh4/README.sh4
 */
-#include "vl.h"
+#include "hw.h"
+#include "sh.h"
+#include "sysemu.h"
+#include "boards.h"
+#include "loader.h"
 
 #define BIOS_FILENAME "shix_bios.bin"
 #define BIOS_ADDRESS 0xA0000000
 
-void DMA_run(void)
-{
-    /* XXXXX */
-}
-
-void irq_info(void)
-{
-    /* XXXXX */
-}
-
-void pic_info()
-{
-    /* XXXXX */
-}
-
-void vga_update_display()
-{
-    /* XXXXX */
-}
-
-void vga_invalidate_display()
-{
-    /* XXXXX */
-}
-
-void vga_screen_dump(const char *filename)
-{
-    /* XXXXX */
-}
-
-void shix_init(int ram_size, int vga_ram_size, int boot_device,
-	       DisplayState * ds, const char **fd_filename, int snapshot,
+static void shix_init(ram_addr_t ram_size,
+               const char *boot_device,
 	       const char *kernel_filename, const char *kernel_cmdline,
 	       const char *initrd_filename, const char *cpu_model)
 {
     int ret;
     CPUState *env;
     struct SH7750State *s;
+    
+    if (!cpu_model)
+        cpu_model = "any";
 
     printf("Initializing CPU\n");
-    env = cpu_init();
+    env = cpu_init(cpu_model);
 
     /* Allocate memory space */
     printf("Allocating ROM\n");
@@ -83,12 +60,14 @@ void shix_init(int ram_size, int vga_ram_size, int boot_device,
     cpu_register_physical_memory(0x0c000000, 0x01000000, 0x01004000);
 
     /* Load BIOS in 0 (and access it through P2, 0xA0000000) */
-    printf("%s: load BIOS '%s'\n", __func__, BIOS_FILENAME);
-    ret = load_image(BIOS_FILENAME, phys_ram_base);
+    if (bios_name == NULL)
+        bios_name = BIOS_FILENAME;
+    printf("%s: load BIOS '%s'\n", __func__, bios_name);
+    ret = load_image_targphys(bios_name, 0, 0x4000);
     if (ret < 0) {		/* Check bios size */
 	fprintf(stderr, "ret=%d\n", ret);
 	fprintf(stderr, "qemu: could not load SHIX bios '%s'\n",
-		BIOS_FILENAME);
+		bios_name);
 	exit(1);
     }
 
@@ -99,8 +78,16 @@ void shix_init(int ram_size, int vga_ram_size, int boot_device,
     fprintf(stderr, "initialization terminated\n");
 }
 
-QEMUMachine shix_machine = {
-    "shix",
-    "shix card",
-    shix_init
+static QEMUMachine shix_machine = {
+    .name = "shix",
+    .desc = "shix card",
+    .init = shix_init,
+    .is_default = 1,
 };
+
+static void shix_machine_init(void)
+{
+    qemu_register_machine(&shix_machine);
+}
+
+machine_init(shix_machine_init);
