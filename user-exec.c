@@ -22,6 +22,12 @@
 #include "disas.h"
 #include "tcg.h"
 
+#ifndef __GNUC__
+CPUState *env;
+#elif defined __clang__
+CPUState *env;
+#endif
+
 #undef EAX
 #undef ECX
 #undef EDX
@@ -165,7 +171,7 @@ int cpu_signal_handler(int host_signum, void *pinfo,
                        void *puc)
 {
     siginfo_t *info = pinfo;
-#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__DragonFly__)
+#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__APPLE__)
     ucontext_t *uc = puc;
 #elif defined(__OpenBSD__)
     struct sigcontext *uc = puc;
@@ -203,11 +209,25 @@ int cpu_signal_handler(int host_signum, void *pinfo,
 #define MASK_sig(context)     ((context)->sc_mask)
 #elif defined(__FreeBSD__) || defined(__DragonFly__)
 #include <ucontext.h>
-
 #define PC_sig(context)  (*((unsigned long *)&(context)->uc_mcontext.mc_rip))
 #define TRAP_sig(context)     ((context)->uc_mcontext.mc_trapno)
 #define ERROR_sig(context)    ((context)->uc_mcontext.mc_err)
 #define MASK_sig(context)     ((context)->uc_sigmask)
+#elif defined (__APPLE__)
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 600
+#endif
+#include <ucontext.h>
+#if __DARWIN_UNIX03
+#define PC_sig(context) (*((unsigned long *)&(context)->uc_mcontext->__ss.__rip))
+#define TRAP_sig(context) ((context)->uc_mcontext->__es.__trapno)
+#define ERROR_sig(context) ((context)->uc_mcontext->__es.__err)
+#else
+#define PC_sig(context) (*((unsigned long *)&(context)->uc_mcontext->ss.rip))
+#define TRAP_sig(context) ((context)->uc_mcontext->es.trapno)
+#define ERROR_sig(context) ((context)->uc_mcontext->es.err)
+#endif
+#define MASK_sig(context) ((context)->uc_sigmask)
 #else
 #define PC_sig(context)       ((context)->uc_mcontext.gregs[REG_RIP])
 #define TRAP_sig(context)     ((context)->uc_mcontext.gregs[REG_TRAPNO])
@@ -220,7 +240,7 @@ int cpu_signal_handler(int host_signum, void *pinfo,
 {
     siginfo_t *info = pinfo;
     unsigned long pc;
-#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__DragonFly__)
+#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__APPLE__)
     ucontext_t *uc = puc;
 #elif defined(__OpenBSD__)
     struct sigcontext *uc = puc;

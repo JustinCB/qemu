@@ -55,6 +55,15 @@
 #error unsupported CPU
 #endif
 
+#ifdef __GNUC__
+#ifdef __clang__
+extern CPUState *env;
+#else
 register CPUState *env asm(AREG0);
+#endif
+#else
+extern CPUState *env;
+#endif
+
 
 #endif /* !defined(__DYNGEN_EXEC_H__) */
