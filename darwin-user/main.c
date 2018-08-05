@@ -39,6 +39,21 @@
 #include <mach/mach_init.h>
 #include <mach/vm_map.h>
 
+
+#define gdb_handlesig(env,sig) info.si_signo = sig;
+
+
+
+
+#if defined(CONFIG_USE_GUEST_BASE)
+unsigned long mmap_min_addr;
+unsigned long guest_base;
+int have_guest_base;
+#endif
+
+
+
+
 int singlestep;
 
 const char *interp_prefix = "";
@@ -130,7 +145,6 @@ do {                                                                    \
     qemu_log(fmt, ## __VA_ARGS__);                                      \
     log_cpu_state(env, 0);                                              \
 } while (0)
-
 void cpu_loop(CPUPPCState *env)
 {
     int trapnr;
@@ -158,19 +172,15 @@ void cpu_loop(CPUPPCState *env)
 #endif
             EXCP_DUMP(env, "Invalid data memory access: 0x" TARGET_FMT_lx "\n",
                       env->spr[SPR_DAR]);
-            /* Handle this via the gdb */
-            gdb_handlesig (env, SIGSEGV);
-
             info.si_addr = (void*)env->nip;
+            info.si_signo = SIGSEGV;
             queue_signal(info.si_signo, &info);
             break;
         case POWERPC_EXCP_ISI:      /* Instruction storage exception         */
             EXCP_DUMP(env, "Invalid instruction fetch: 0x\n" TARGET_FMT_lx "\n",
                       env->spr[SPR_DAR]);
-            /* Handle this via the gdb */
-            gdb_handlesig (env, SIGSEGV);
-
             info.si_addr = (void*)(env->nip - 4);
+            info.si_signo = SIGSEGV;
             queue_signal(info.si_signo, &info);
             break;
         case POWERPC_EXCP_EXTERNAL: /* External input                        */
@@ -502,7 +512,13 @@ void cpu_loop(CPUPPCState *env)
 
 uint64_t cpu_get_tsc(CPUX86State *env)
 {
-    return cpu_get_real_ticks();
+    static int starting_ticks;
+    int ticks;
+    if (starting_ticks = 0) {
+        asm volatile("rdtsc\n\tnop\n\tnop\n\tnop": "=a"(starting_ticks)::"%edx");
+    }
+    asm volatile("nop\n\tnop\n\tnop\n\trdtsc": "=a"(ticks)::"%edx");
+    return ticks-starting_ticks;
 }
 
 void
@@ -1014,11 +1030,11 @@ int main(int argc, char **argv)
 #error unsupported target CPU
 #endif
 
-    if (use_gdbstub) {
+    /*if (use_gdbstub) {
         printf("Waiting for gdb Connection on port 1234...\n");
         gdbserver_start (1234);
         gdb_handlesig(env, 0);
-    }
+    }*/
 
     cpu_loop(env);
     /* never exits */

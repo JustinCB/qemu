@@ -425,11 +425,11 @@ handle_signal:
     if (!k->first)
         k->pending = 0;
 
-    sig = gdb_handlesig (cpu_env, sig);
+    /*sig = gdb_handlesig (cpu_env, sig);
     if (!sig) {
         fprintf (stderr, "Lost signal\n");
         abort();
-    }
+    }*/
 
     handler = k->sa.sa_handler;
     if (handler == SIG_DFL) {

@@ -24,6 +24,10 @@
 #include <errno.h>
 #include <sys/mman.h>
 
+
+unsigned long last_brk;
+
+
 #include "qemu.h"
 
 //#define DEBUG_MMAP

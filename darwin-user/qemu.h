@@ -13,6 +13,11 @@
 #endif
 
 
+
+extern unsigned long last_brk;
+
+
+
 #include "cpu.h"
 
 #include "thunk.h"
@@ -92,6 +97,19 @@ struct target_sigcontext {
 
 #endif
 
+
+/* user access */
+
+#define VERIFY_READ 0x00000010
+#define VERIFY_WRITE 0x00000110 /* implies read access */
+
+static inline int access_ok(int type, abi_ulong addr, abi_ulong size)
+{
+    return page_check_range((target_ulong)addr, size,
+                            (type == VERIFY_READ) ? PAGE_READ : (PAGE_READ | PAGE_WRITE)) == 0;
+}
+
+
 typedef struct TaskState {
     struct TaskState *next;
     int used; /* non zero if used */
@@ -150,7 +168,14 @@ int target_msync(unsigned long start, unsigned long len, int flags);
 /* user access */
 
 /* XXX: todo protect every memory access */
-static inline void *lock_user(int type, abi_ulong guest_addr, long len, int copy)
+#define REAL_UNDERSCORE_CONCATENATE(a,b) a ## _ ## b
+#define UNDERSCORE_CONCATENATE(a,b) REAL_UNDERSCORE_CONCATENATE(a,b)
+#define lock_user_GET_NUMARGS(first,second,third,fourth,fifth,...) fifth
+#define lock_user_FIND_NUMARGS(...) lock_user_GET_NUMARGS(__VA_ARGS__, 4, 3)
+#define MACRO_CALL(func,...) func(__VA_ARGS__)
+#define lock_user(...) MACRO_CALL(UNDERSCORE_CONCATENATE(lock_user, lock_user_FIND_NUMARGS(__VA_ARGS__)), __VA_ARGS__)
+#define lock_user_3(...) lock_user_4(0, __VA_ARGS__)
+static inline void *lock_user_4(int type, abi_ulong guest_addr, long len, int copy)
 {
     if (type == 0) {
         return g2h(guest_addr);

@@ -27,7 +27,6 @@
 #include <mach/mach_time.h>
 #include <mach/message.h>
 
-#include <pthread.h>
 #include <dirent.h>
 
 #include <sys/stat.h>
@@ -55,6 +54,24 @@
 #include <sys/xattr.h>
 
 #include "qemu.h"
+
+
+#include <dlfcn.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <mach/mach.h>
+#include <mach/error.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <sys/sysctl.h>
+#include <dlfcn.h>
+#include <sys/mman.h>
+
+#include <sys/stat.h>
+#include <pthread.h>
+
+
 
 //#define DEBUG_SYSCALL
 
@@ -481,12 +498,12 @@ long do_mach_syscall(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uint3
         ret = semaphore_wait_signal_trap(arg1,arg2);
         break;
 #endif
-    case -43:
+    /*case -43:
         DPRINTF("map_fd(0x%x, 0x%x, 0x%x, 0x%x, 0x%x)\n",
                 arg1, arg2, arg3, arg4, arg5);
         ret = map_fd(arg1, arg2, (void*)arg3, arg4, arg5);
         tswap32s((uint32_t*)arg3);
-        break;
+        break;*/
 /* may need more translation if target arch is different from host */
 #if (defined(TARGET_I386) && defined(__i386__)) || (defined(TARGET_PPC) && defined(__ppc__))
     case -61:
@@ -535,7 +552,6 @@ long do_mach_syscall(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uint3
         break;
     default:
         gemu_log("qemu: Unsupported mach syscall: %d(0x%x)\n", num, num);
-        gdb_handlesig (cpu_env, SIGTRAP);
         exit(0);
         break;
     }
@@ -549,8 +565,8 @@ long do_thread_syscall(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uin
                 uint32_t arg4, uint32_t arg5, uint32_t arg6, uint32_t arg7,
                 uint32_t arg8)
 {
-    extern uint32_t cthread_set_self(uint32_t);
-    extern uint32_t processor_facilities_used(void);
+    /*uint32_t cthread_set_self(uint32_t);*/
+    /*uint32_t processor_facilities_used(void);*/
     long ret = 0;
 
     arg1 = tswap32(arg1);
@@ -568,9 +584,11 @@ long do_thread_syscall(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uin
 #ifdef TARGET_I386
     case 0x3:
 #endif
+#if 0
     case 0x7FF1: /* cthread_set_self */
         DPRINTF("cthread_set_self(0x%x)\n", (unsigned int)arg1);
         ret = cthread_set_self(arg1);
+#endif
 #ifdef TARGET_I386
         /* we need to update the LDT with the address of the thread */
         write_dt((void *)(((CPUX86State *) cpu_env)->ldt.base + (4 * sizeof(uint64_t))), arg1, 1,
@@ -586,6 +604,7 @@ long do_thread_syscall(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uin
         DPRINTF("pthread_self()\n");
         ret = (uint32_t)pthread_self();
         break;
+#if 0
     case 0x7FF3:
         DPRINTF("processor_facilities_used()\n");
 #ifdef __i386__
@@ -594,9 +613,9 @@ long do_thread_syscall(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uin
         ret = (uint32_t)processor_facilities_used();
 #endif
         break;
+#endif
     default:
         gemu_log("qemu: Unsupported thread syscall: %d(0x%x)\n", num, num);
-        gdb_handlesig (cpu_env, SIGTRAP);
         exit(0);
         break;
     }
@@ -1200,7 +1219,7 @@ long do_lstat(char * arg1, struct stat * arg2)
     return ret;
 }
 
-long do_getdirentries(uint32_t arg1, void* arg2, uint32_t arg3, void* arg4)
+/*long do_getdirentries(uint32_t arg1, void* arg2, uint32_t arg3, void* arg4)
 {
     long ret;
     DPRINTF("getdirentries(0x%x, %p, 0x%x, %p)\n", arg1, arg2, arg3, arg4);
@@ -1212,7 +1231,7 @@ long do_getdirentries(uint32_t arg1, void* arg2, uint32_t arg3, void* arg4)
     if(!is_error(ret))
         byteswap_dirents(arg2, ret);
     return ret;
-}
+}*/
 
 long do_lseek(void *cpu_env, int num)
 {
@@ -1538,7 +1557,6 @@ long unimpl_unix_syscall(void *cpu_env, int num)
         qerror("unix syscall %d is out of unix syscall bounds (0-%d) " , num, SYS_MAXSYSCALL-1);
 
     gemu_log("qemu: Unsupported unix syscall %s %d\n", unix_syscall_table[num].name , num);
-    gdb_handlesig (cpu_env, SIGTRAP);
     exit(-1);
 }
 

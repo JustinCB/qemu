@@ -351,7 +351,7 @@ do_commpage(void *cpu_env, int num, uint32_t arg1, uint32_t arg2, uint32_t arg3,
     if(!found)
     {
         gemu_log("qemu: commpage function 0x%x not defined\n", num);
-        gdb_handlesig (cpu_env, SIGTRAP);
+        /*gdb_handlesig (cpu_env, SIGTRAP);*/
         exit(-1);
     }
 }

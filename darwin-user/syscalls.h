@@ -44,7 +44,7 @@
  ENTRY("dup",                      SYS_dup,                            dup,                               1, CALL_DIRECT, INT)   /* 41  */
  ENTRY("pipe",                     SYS_pipe,                           pipe,               0, CALL_INDIRECT, PTR)   /* 42  */
  ENTRY("getegid",                  SYS_getegid,                        getegid,                           0, CALL_NOERRNO, VOID)  /* 43  */
- ENTRY("profil",                   /*SYS_profil*/44,                         profil,                            4, CALL_DIRECT, PTR, SIZE, INT, INT)   /* 44  */
+ ENTRY("profil",                   /*SYS_profil*/44,                         /*profil*/no_syscall,                            /*4*/0, /*CALL_DIRECT*/CALL_INDIRECT, /*PTR, SIZE, INT, INT*/VOID)   /* 44  */
  ENTRY("ktrace",                   /*SYS_ktrace*/45,                         no_syscall,                        4, CALL_INDIRECT, VOID) /* 45  */
  ENTRY("sigaction",                SYS_sigaction,                      do_sigaction,                      3, CALL_DIRECT, INT, PTR, PTR)   /* 46  */
  ENTRY("getgid",                   SYS_getgid,                         getgid,                            0, CALL_NOERRNO, VOID)  /* 47  */
@@ -181,7 +181,7 @@
  ENTRY("waitid",                   SYS_waitid,                         unimpl_unix_syscall,               4, CALL_INDIRECT, VOID) /* 173  */
  ENTRY("",                         174,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 174  old getdents */
  ENTRY("",                         175,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 175  old gc_control */
- ENTRY("add_profil",               /*SYS_add_profil*/176,                     add_profil,                        4, CALL_DIRECT, PTR, SIZE, UINT, UINT)   /* 176  */
+ ENTRY("add_profil",               /*SYS_add_profil*/176,                     /*add_profil*/no_syscall,                        /*4*/0, /*CALL_DIRECT*/CALL_INDIRECT, /*PTR, SIZE, UINT, UINT*/VOID)   /* 176  */
  ENTRY("",                         177,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 177  */
  ENTRY("",                         178,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 178  */
  ENTRY("",                         179,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 179  */
@@ -202,7 +202,7 @@
  ENTRY("",                         193,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 193  */
  ENTRY("getrlimit",                SYS_getrlimit,                      getrlimit,                         2, CALL_DIRECT, UINT, PTR)   /* 194  */
  ENTRY("setrlimit",                SYS_setrlimit,                      setrlimit,                         2, CALL_DIRECT, UINT, PTR)   /* 195  */
- ENTRY("getdirentries",            SYS_getdirentries,                  do_getdirentries,                  4, CALL_DIRECT, INT, PTR, UINT, PTR)   /* 196  */
+ ENTRY("getdirentries",            SYS_getdirentries,                  /*do_getdirentries*/no_syscall,                  /*4*/0, /*CALL_DIRECT*/CALL_INDIRECT, /*INT, PTR, UINT, PTR*/VOID)   /* 196  */
  ENTRY("mmap",                     SYS_mmap,                           target_mmap,                       6, CALL_DIRECT, UINT /*PTR*/, SIZE, INT, INT, INT, OFFSET)   /* 197  */
  ENTRY("",                         198,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 198  __syscall */
  ENTRY("lseek",                    SYS_lseek,                          do_lseek,                          3, CALL_INDIRECT, INT, OFFSET, INT)   /* 199  */
@@ -230,7 +230,7 @@
  ENTRY("setattrlist",              SYS_setattrlist,                    unimpl_unix_syscall,               5, CALL_INDIRECT, VOID) /* 221  */
  ENTRY("getdirentriesattr",        SYS_getdirentriesattr,              do_getdirentriesattr,              8, CALL_DIRECT, INT, PTR, PTR, SIZE, PTR, PTR, PTR, UINT)   /* 222  */
  ENTRY("exchangedata",             SYS_exchangedata,                   exchangedata,                      3, CALL_DIRECT, PTR, PTR, UINT)   /* 223  */
- ENTRY("checkuseraccess",          /*SYS_checkuseraccess*/224,                checkuseraccess,                   6, CALL_DIRECT, PTR, INT, PTR, INT, INT, UINT)   /* 224  */
+ ENTRY("checkuseraccess",          /*SYS_checkuseraccess*/224,                /*checkuseraccess*/no_syscall,                   /*6*/0, /*CALL_DIRECT*/CALL_INDIRECT, /*PTR, INT, PTR, INT, INT, UINT*/VOID)   /* 224  */
  ENTRY("",                         224,                                no_syscall,                        0, CALL_INDIRECT, VOID) /* 224  HFS checkuseraccess check access to a file */
  ENTRY("searchfs",                 SYS_searchfs,                       searchfs,                          6, CALL_DIRECT, PTR, PTR, PTR, UINT, UINT, PTR)   /* 225  */
  ENTRY("delete",                   SYS_delete,                         no_syscall,                        1, CALL_INDIRECT, VOID)   /* 226  private delete ( Carbon semantics ) */
