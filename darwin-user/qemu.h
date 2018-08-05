@@ -150,7 +150,15 @@ int target_msync(unsigned long start, unsigned long len, int flags);
 /* user access */
 
 /* XXX: todo protect every memory access */
-#define lock_user(x,y,z)    (void*)(x)
+static inline void *lock_user(int type, abi_ulong guest_addr, long len, int copy)
+{
+    if (type == 0) {
+        return g2h(guest_addr);
+    }
+    if (!access_ok(type, guest_addr, len))
+        return NULL;
+    return g2h(guest_addr);
+}
 #define unlock_user(x,y,z)
 
 /* Mac OS X ABI arguments processing */
